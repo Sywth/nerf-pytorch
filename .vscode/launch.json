@@ -8,13 +8,49 @@
       "console": "integratedTerminal",
       "args": [
         "--config",
-        "configs/ct_data_4_256_64_560.txt",
+        "configs/lego.txt",
+
         "--i_video",
         "250",
         "--i_weights",
         "250",
         "--n_iters",
-        "1000"
+        "1000",
+
+        "--fps",
+        "30",
+
+        "--video_render_w",
+        "128",
+        "--video_render_h",
+        "128",
+
+        "--chunk",
+        "6144"
+      ],
+      "args2": [
+        "--config",
+        "configs/lego.txt",
+        "--i_video",
+        "250",
+        "--i_weights",
+        "250",
+        "--n_iters",
+        "1000",
+        "--chunk",
+        "8192",
+        "--video_export_pngs"
+      ],
+      "args1": [
+        "--config",
+        "configs/lego.txt",
+        "--render_only",
+        "--chunk",
+        "8192",
+        "--video_render_w",
+        "64",
+        "--video_render_h",
+        "64"
       ]
     }
   ]

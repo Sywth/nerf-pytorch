@@ -1,3 +1,4 @@
+import argparse
 import os, sys
 import numpy as np
 import imageio
@@ -714,6 +715,34 @@ def config_parser():
         default=200_000,
         help="number of iterations to train the model",
     )
+    parser.add_argument(
+        "--video_use_set_resolution",
+        action=argparse.BooleanOptionalAction,
+        help="Use set resolution when rendering checkpoints via --video_render_w --video_render_h",
+    )
+    parser.add_argument(
+        "--video_render_w",
+        type=int,
+        default=128,
+        help="width of the video to render",
+    )
+    parser.add_argument(
+        "--video_render_h",
+        type=int,
+        default=128,
+        help="height of the video to render",
+    )
+    parser.add_argument(
+        "--video_export_pngs",
+        action=argparse.BooleanOptionalAction,
+        help="Export PNGs frames of rgb and disp instead video",
+    )
+    parser.add_argument(
+        "--fps",
+        type=int,
+        default=30,
+        help="Frames per second of the video",
+    )
 
     return parser
 
@@ -812,6 +841,11 @@ def train():
     H, W = int(H), int(W)
     hwf = [H, W, focal]
 
+    # NOTE : reduce rendering times addition
+    hwf_rendering = hwf
+    if args.video_use_set_resolution:
+        hwf_rendering = [args.video_render_w, args.video_render_h, focal]
+
     if K is None:
         K = np.array([[focal, 0, 0.5 * W], [0, focal, 0.5 * H], [0, 0, 1]])
 
@@ -871,7 +905,7 @@ def train():
 
             rgbs, _ = render_path(
                 render_poses,
-                hwf,
+                hwf_rendering,
                 K,
                 args.chunk,
                 render_kwargs_test,
@@ -881,7 +915,10 @@ def train():
             )
             print("Done rendering", testsavedir)
             imageio.mimwrite(
-                os.path.join(testsavedir, "video.mp4"), to8b(rgbs), fps=30, quality=8
+                os.path.join(testsavedir, "video.mp4"),
+                to8b(rgbs),
+                fps=args.fps,
+                quality=8,
             )
 
             return
@@ -926,7 +963,7 @@ def train():
     # writer = SummaryWriter(os.path.join(basedir, 'summaries', expname))
 
     # NOTE : Reduced number of poses to reduce video render times
-    render_poses = render_poses[::5]
+    render_poses = render_poses[::4]
 
     start = start + 1
     for i in trange(start, N_iters):
@@ -1054,16 +1091,45 @@ def train():
             # Turn on testing mode
             with torch.no_grad():
                 rgbs, disps = render_path(
-                    render_poses, hwf, K, args.chunk, render_kwargs_test
+                    render_poses, hwf_rendering, K, args.chunk, render_kwargs_test
                 )
+
             print("Done, saving", rgbs.shape, disps.shape)
             moviebase = os.path.join(
                 basedir, expname, "{}_spiral_{:06d}_".format(expname, i)
             )
-            imageio.mimwrite(moviebase + "rgb.mp4", to8b(rgbs), fps=30, quality=8)
-            imageio.mimwrite(
-                moviebase + "disp.mp4", to8b(disps / np.max(disps)), fps=30, quality=8
-            )
+            if args.video_export_pngs:
+                frames_dir = moviebase + f"frames_rgb_{i}/"
+                os.makedirs(frames_dir, exist_ok=True)
+                for frame_no in range(rgbs.shape[0]):
+                    imageio.imwrite(
+                        frames_dir + f"{frame_no:04d}.png",
+                        to8b(rgbs[frame_no]),
+                    )
+
+                frames_dir = moviebase + f"frames_disp_{i}/"
+                os.makedirs(frames_dir, exist_ok=True)
+                for frame_no in range(disps.shape[0]):
+                    imageio.imwrite(
+                        frames_dir + f"{frame_no:04d}.png",
+                        to8b(disps[frame_no] / np.max(disps[frame_no])),
+                    )
+
+            else:  # by Default we render the mp4 instead of the pngs
+                imageio.mimwrite(
+                    moviebase + "rgb.mp4",
+                    to8b(rgbs),
+                    fps=args.fps,
+                    quality=8,
+                )
+                # replace NaNs with 0s
+                disps = np.nan_to_num(disps)
+                imageio.mimwrite(
+                    moviebase + "disp.mp4",
+                    to8b(disps / np.max(disps)),
+                    fps=args.fps,
+                    quality=8,
+                )
 
             # if args.use_viewdirs:
             #     render_kwargs_test['c2w_staticcam'] = render_poses[0][:3,:4]
