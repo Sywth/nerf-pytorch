@@ -1,0 +1,21 @@
+{
+  "configurations": [
+    {
+      "name": "Python Debugger: Current File",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${file}",
+      "console": "integratedTerminal",
+      "args": [
+        "--config",
+        "configs/ct_data_4_256_64_560.txt",
+        "--i_video",
+        "250",
+        "--i_weights",
+        "250",
+        "--n_iters",
+        "1000"
+      ]
+    }
+  ]
+}
