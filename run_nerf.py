@@ -11,6 +11,7 @@ import torch.nn.functional as F
 from tqdm import tqdm, trange
 
 import matplotlib.pyplot as plt
+import utils
 
 from run_nerf_helpers import *
 
@@ -943,6 +944,9 @@ def train():
         else get_rays(H, W, K, torch.Tensor(poses[0, :3, :4]))
     )
 
+    plt.imshow(np.random.rand(H, W, 3))
+    plt.show()
+    utils.plot_rays(rays_o, rays_d)
     # NOTE : END RAY TEST PLOTTING
 
     # Prepare raybatch tensor if batching random rays

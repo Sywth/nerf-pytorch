@@ -8,7 +8,7 @@
       "console": "integratedTerminal",
       "args": [
         "--config",
-        "configs/ct_data_4_256_32_169.txt",
+        "configs/lego.txt",
 
         "--dataset_type",
         "blender",
