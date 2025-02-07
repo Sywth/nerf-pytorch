@@ -1,6 +1,6 @@
-expname = ct_data_4_256_32_782
+expname = unzip-blender_paper_lego
 basedir = ./logs
-datadir = ./data/nerf_synthetic/ct_data_4_256_32_782
+datadir = ./data/nerf_synthetic/unzip-lego
 dataset_type = blender
 
 no_batching = True
