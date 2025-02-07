@@ -310,6 +310,8 @@ def create_nerf(args):
     render_kwargs_test["perturb"] = False
     render_kwargs_test["raw_noise_std"] = 0.0
 
+    render_kwargs_train["use_ortho"] = bool(args.use_ortho)
+
     return render_kwargs_train, render_kwargs_test, start, grad_vars, optimizer
 
 
