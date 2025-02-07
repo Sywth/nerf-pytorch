@@ -90,7 +90,15 @@ def load_blender_data(basedir, half_res=False, testskip=1):
     poses = np.concatenate(all_poses, 0)
 
     H, W = imgs[0].shape[:2]
+
     camera_angle_x = float(meta["camera_angle_x"])
+    print(f"Using Camera X : {camera_angle_x}")
+    # check if nan or inf
+    if np.isnan(camera_angle_x) or np.isinf(camera_angle_x):
+        raise ValueError(
+            "Camera angle is nan or inf. For orthogonal use flag --use_ortho"
+        )
+
     focal = 0.5 * W / np.tan(0.5 * camera_angle_x)
 
     render_poses = torch.stack(

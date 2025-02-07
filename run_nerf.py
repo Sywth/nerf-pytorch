@@ -108,7 +108,11 @@ def render(
     """
     if c2w is not None:
         # special case to render full image
-        rays_o, rays_d = get_rays(H, W, K, c2w)
+        if kwargs.get("use_ortho", False):
+            rays_o, rays_d = get_rays_ortho(H, W, K, c2w)
+        else:
+            rays_o, rays_d = get_rays(H, W, K, c2w)
+
     else:
         # use provided ray batch
         rays_o, rays_d = rays
@@ -118,7 +122,11 @@ def render(
         viewdirs = rays_d
         if c2w_staticcam is not None:
             # special case to visualize effect of viewdirs
-            rays_o, rays_d = get_rays(H, W, K, c2w_staticcam)
+            if kwargs.get("use_ortho", False):
+                rays_o, rays_d = get_rays_ortho(H, W, K, c2w_staticcam)
+            else:
+                rays_o, rays_d = get_rays(H, W, K, c2w_staticcam)
+
         viewdirs = viewdirs / torch.norm(viewdirs, dim=-1, keepdim=True)
         viewdirs = torch.reshape(viewdirs, [-1, 3]).float()
 
@@ -743,6 +751,11 @@ def config_parser():
         default=30,
         help="Frames per second of the video",
     )
+    parser.add_argument(
+        "--use_ortho",
+        action=argparse.BooleanOptionalAction,
+        help="Use orthographic projection instead of perspective",
+    )
 
     return parser
 
@@ -923,15 +936,28 @@ def train():
 
             return
 
+    # NOTE : START RAY TEST PLOTTING
+    rays_o, rays_d = (
+        get_rays_ortho(H, W, K, torch.Tensor(poses[0, :3, :4]))
+        if args.use_ortho
+        else get_rays(H, W, K, torch.Tensor(poses[0, :3, :4]))
+    )
+
+    # NOTE : END RAY TEST PLOTTING
+
     # Prepare raybatch tensor if batching random rays
     N_rand = args.N_rand
     use_batching = not args.no_batching
     if use_batching:
         # For random ray batching
         print("get rays")
-        rays = np.stack(
-            [get_rays_np(H, W, K, p) for p in poses[:, :3, :4]], 0
-        )  # [N, ro+rd, H, W, 3]
+        if args.use_ortho:
+            rays = get_rays_np_ortho(H, W, K, N_rand)
+        else:
+            rays = np.stack(
+                [get_rays_np(H, W, K, p) for p in poses[:, :3, :4]], 0
+            )  # [N, ro+rd, H, W, 3]
+
         print("done, concats")
         rays_rgb = np.concatenate([rays, images[:, None]], 1)  # [N, ro+rd+rgb, H, W, 3]
         rays_rgb = np.transpose(rays_rgb, [0, 2, 3, 1, 4])  # [N, H, W, ro+rd+rgb, 3]
@@ -991,9 +1017,12 @@ def train():
             pose = poses[img_i, :3, :4]
 
             if N_rand is not None:
-                rays_o, rays_d = get_rays(
-                    H, W, K, torch.Tensor(pose)
-                )  # (H, W, 3), (H, W, 3)
+                if args.use_ortho:
+                    rays_o, rays_d = get_rays_ortho(H, W, K, torch.Tensor(pose))
+                else:
+                    rays_o, rays_d = get_rays(
+                        H, W, K, torch.Tensor(pose)
+                    )  # (H, W, 3), (H, W, 3)
 
                 if i < args.precrop_iters:
                     dH = int(H // 2 * args.precrop_frac)

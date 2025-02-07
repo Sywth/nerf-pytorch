@@ -8,6 +8,24 @@
       "console": "integratedTerminal",
       "args": [
         "--config",
+        "configs/ct_data_4_256_32_169.txt",
+
+        "--dataset_type",
+        "blender",
+
+        "--i_video",
+        "250",
+        "--i_weights",
+        "250",
+        "--n_iters",
+        "1000",
+        "--fps",
+        "8",
+        "--chunk",
+        "8192"
+      ],
+      "args3": [
+        "--config",
         "configs/lego.txt",
 
         "--i_video",
