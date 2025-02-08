@@ -203,8 +203,30 @@ def get_rays(H, W, K, c2w):
     return rays_o, rays_d
 
 
-def get_rays_ortho(*args, **kwargs):
-    assert False, "Not implemented for orthographic projection"
+def get_rays_ortho(H, W, c2w, view_bounds=(-1, 1, -1, 1), scale=1.0):
+    xmin, xmax, ymin, ymax = view_bounds
+
+    i, j = torch.meshgrid(
+        torch.linspace(xmin, xmax, W), torch.linspace(ymax, ymin, H), indexing="ij"
+    )
+    i = i.t()
+    j = j.t()
+
+    # Compute ray origins in world space
+    x = i * scale
+    y = j * scale
+    z = torch.zeros_like(x)  # All rays originate from the same depth plane
+
+    rays_o = torch.stack([x, y, z], -1)
+    rays_o = torch.sum(rays_o[..., np.newaxis, :] * c2w[:3, :3], -1) + c2w[:3, -1]
+
+    # All rays have the same direction: negative z-axis in camera space transformed to world space
+    rays_d = c2w[:3, :3] @ torch.tensor(
+        [0, 0, -1.0], dtype=c2w.dtype, device=c2w.device
+    )
+    rays_d = rays_d.expand(rays_o.shape)
+
+    return rays_o, rays_d
 
 
 def get_rays_np(H, W, K, c2w):

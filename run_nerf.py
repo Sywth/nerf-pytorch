@@ -1,3 +1,5 @@
+import override_plotting
+
 import argparse
 import os, sys
 import numpy as np
@@ -384,6 +386,7 @@ def render_rays(
     raw_noise_std=0.0,
     verbose=False,
     pytest=False,
+    use_ortho=False,
 ):
     """Volumetric rendering.
     Args:
@@ -940,15 +943,7 @@ def train():
             return
 
     # NOTE : START RAY TEST PLOTTING
-    rays_o, rays_d = (
-        get_rays_ortho(H, W, K, torch.Tensor(poses[0, :3, :4]))
-        if args.use_ortho
-        else get_rays(H, W, K, torch.Tensor(poses[0, :3, :4]))
-    )
-
-    plt.imshow(np.random.rand(H, W, 3))
-    plt.show()
-    utils.plot_rays(rays_o, rays_d)
+    utils.make_plot_of_rays(K, poses[0, :3, :4], not args.use_ortho)
     # NOTE : END RAY TEST PLOTTING
 
     # Prepare raybatch tensor if batching random rays
