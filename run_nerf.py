@@ -77,6 +77,7 @@ def render(
     H,
     W,
     K,
+    use_ortho : bool,
     chunk=1024 * 32,
     rays=None,
     c2w=None,
@@ -111,8 +112,8 @@ def render(
     """
     if c2w is not None:
         # special case to render full image
-        if kwargs.get("use_ortho", False):
-            rays_o, rays_d = get_rays_ortho(H, W, K, c2w)
+        if use_ortho:
+            rays_o, rays_d = get_rays_ortho(H, W, c2w)
         else:
             rays_o, rays_d = get_rays(H, W, K, c2w)
 
@@ -125,8 +126,8 @@ def render(
         viewdirs = rays_d
         if c2w_staticcam is not None:
             # special case to visualize effect of viewdirs
-            if kwargs.get("use_ortho", False):
-                rays_o, rays_d = get_rays_ortho(H, W, K, c2w_staticcam)
+            if use_ortho:
+                rays_o, rays_d = get_rays_ortho(H, W, c2w_staticcam)
             else:
                 rays_o, rays_d = get_rays(H, W, K, c2w_staticcam)
 
@@ -166,6 +167,7 @@ def render_path(
     hwf,
     K,
     chunk,
+    use_ortho,
     render_kwargs,
     gt_imgs=None,
     savedir=None,
@@ -188,7 +190,7 @@ def render_path(
         print(i, time.time() - t)
         t = time.time()
         rgb, disp, acc, _ = render(
-            H, W, K, chunk=chunk, c2w=c2w[:3, :4], **render_kwargs
+            H, W, K, use_ortho=use_ortho, chunk=chunk, c2w=c2w[:3, :4], **render_kwargs
         )
         rgbs.append(rgb.cpu().numpy())
         disps.append(disp.cpu().numpy())
@@ -312,8 +314,6 @@ def create_nerf(args):
     render_kwargs_test["perturb"] = False
     render_kwargs_test["raw_noise_std"] = 0.0
 
-    render_kwargs_train["use_ortho"] = bool(args.use_ortho)
-
     return render_kwargs_train, render_kwargs_test, start, grad_vars, optimizer
 
 
@@ -386,7 +386,6 @@ def render_rays(
     raw_noise_std=0.0,
     verbose=False,
     pytest=False,
-    use_ortho=False,
 ):
     """Volumetric rendering.
     Args:
@@ -927,6 +926,7 @@ def train():
                 hwf_rendering,
                 K,
                 args.chunk,
+                args.use_ortho,
                 render_kwargs_test,
                 gt_imgs=images,
                 savedir=testsavedir,
@@ -943,6 +943,7 @@ def train():
             return
 
     # NOTE : START RAY TEST PLOTTING
+    args.use_ortho = True
     utils.make_plot_of_rays(K, poses[0, :3, :4], not args.use_ortho)
     # NOTE : END RAY TEST PLOTTING
 
@@ -1019,7 +1020,7 @@ def train():
 
             if N_rand is not None:
                 if args.use_ortho:
-                    rays_o, rays_d = get_rays_ortho(H, W, K, torch.Tensor(pose))
+                    rays_o, rays_d = get_rays_ortho(H, W, torch.Tensor(pose))
                 else:
                     rays_o, rays_d = get_rays(
                         H, W, K, torch.Tensor(pose)
@@ -1065,6 +1066,7 @@ def train():
             H,
             W,
             K,
+            use_ortho=args.use_ortho,
             chunk=args.chunk,
             rays=batch_rays,
             verbose=i < 10,
@@ -1121,7 +1123,7 @@ def train():
             # Turn on testing mode
             with torch.no_grad():
                 rgbs, disps = render_path(
-                    render_poses, hwf_rendering, K, args.chunk, render_kwargs_test
+                    render_poses, hwf_rendering, K, args.chunk, args.use_ortho, render_kwargs_test
                 )
 
             print("Done, saving", rgbs.shape, disps.shape)
@@ -1178,6 +1180,7 @@ def train():
                     hwf,
                     K,
                     args.chunk,
+                    args.use_ortho,
                     render_kwargs_test,
                     gt_imgs=images[i_test],
                     savedir=testsavedir,
