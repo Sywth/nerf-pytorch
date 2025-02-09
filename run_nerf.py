@@ -77,7 +77,7 @@ def render(
     H,
     W,
     K,
-    use_ortho : bool,
+    use_ortho,
     chunk=1024 * 32,
     rays=None,
     c2w=None,
@@ -190,7 +190,7 @@ def render_path(
         print(i, time.time() - t)
         t = time.time()
         rgb, disp, acc, _ = render(
-            H, W, K, use_ortho=use_ortho, chunk=chunk, c2w=c2w[:3, :4], **render_kwargs
+            H, W, K, chunk=chunk, c2w=c2w[:3, :4], **render_kwargs
         )
         rgbs.append(rgb.cpu().numpy())
         disps.append(disp.cpu().numpy())
@@ -302,6 +302,7 @@ def create_nerf(args):
         "use_viewdirs": args.use_viewdirs,
         "white_bkgd": args.white_bkgd,
         "raw_noise_std": args.raw_noise_std,
+        "use_ortho": args.use_ortho, # NOTE :Added 
     }
 
     # NDC only good for LLFF-style forward facing data
@@ -759,9 +760,9 @@ def config_parser():
     parser.add_argument(
         "--use_ortho",
         action=argparse.BooleanOptionalAction,
+        default=False,
         help="Use orthographic projection instead of perspective",
     )
-
     return parser
 
 
@@ -855,7 +856,12 @@ def train():
         return
 
     # Cast intrinsics to right types
-    H, W, focal = hwf
+    if args.use_ortho:
+        H, W = hwf
+        focal = None
+    else:
+        H, W, focal = hwf
+    
     H, W = int(H), int(W)
     hwf = [H, W, focal]
 
@@ -943,8 +949,7 @@ def train():
             return
 
     # NOTE : START RAY TEST PLOTTING
-    args.use_ortho = True
-    utils.make_plot_of_rays(K, poses[0, :3, :4], not args.use_ortho)
+    utils.make_plot_of_rays(K, poses[0, :3, :4], args.use_ortho)
     # NOTE : END RAY TEST PLOTTING
 
     # Prepare raybatch tensor if batching random rays
@@ -1066,7 +1071,6 @@ def train():
             H,
             W,
             K,
-            use_ortho=args.use_ortho,
             chunk=args.chunk,
             rays=batch_rays,
             verbose=i < 10,

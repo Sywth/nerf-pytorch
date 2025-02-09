@@ -1,7 +1,8 @@
 python run_nerf.py \
-    --config configs/unzip-lego.txt \
-    --i_video 250 \
-    --i_weights 250 \
-    --n_iters 1000 \
+    --config configs/ct_data_13_320_64_741.txt \
+    --i_video 1000 \
+    --i_weights 1000 \
+    --n_iters 10000 \
     --fps 8 \
-    --chunk 32768
+    --chunk 32768 \
+    --use_ortho

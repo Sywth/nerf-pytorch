@@ -1,4 +1,5 @@
 import os
+from warnings import warn
 import torch
 import numpy as np
 import imageio
@@ -29,7 +30,7 @@ rot_theta = lambda th: torch.Tensor(
     ]
 ).float()
 
-
+# NOTE : Consider copying this 
 def pose_spherical(theta, phi, radius):
     c2w = trans_t(radius)
     c2w = rot_phi(phi / 180.0 * np.pi) @ c2w
@@ -93,13 +94,17 @@ def load_blender_data(basedir, half_res=False, testskip=1):
 
     camera_angle_x = float(meta["camera_angle_x"])
     print(f"Using Camera X : {camera_angle_x}")
+
+    ortho_mode = False 
     # check if nan or inf
     if np.isnan(camera_angle_x) or np.isinf(camera_angle_x):
-        raise ValueError(
-            "Camera angle is nan or inf. For orthogonal use flag --use_ortho"
+        warn(
+            "Camera angle is nan or inf. Assuming use of flag --use_ortho"
         )
-
-    focal = 0.5 * W / np.tan(0.5 * camera_angle_x)
+        ortho_mode = True
+    
+    if not ortho_mode:
+        focal = 0.5 * W / np.tan(0.5 * camera_angle_x)
 
     render_poses = torch.stack(
         [
@@ -112,12 +117,17 @@ def load_blender_data(basedir, half_res=False, testskip=1):
     if half_res:
         H = H // 2
         W = W // 2
-        focal = focal / 2.0
+        if not ortho_mode:
+            focal = focal / 2.0
 
         imgs_half_res = np.zeros((imgs.shape[0], H, W, 4))
         for i, img in enumerate(imgs):
             imgs_half_res[i] = cv2.resize(img, (W, H), interpolation=cv2.INTER_AREA)
         imgs = imgs_half_res
-        # imgs = tf.image.resize_area(imgs, [400, 400]).numpy()
 
-    return imgs, poses, render_poses, [H, W, focal], i_split
+    if ortho_mode:
+        return imgs, poses, render_poses, [H,W], i_split
+    else:
+        return imgs, poses, render_poses, [H, W, focal], i_split
+    
+    raise Exception("Unreachable")
