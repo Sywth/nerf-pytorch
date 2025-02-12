@@ -222,7 +222,7 @@ def get_rays_ortho(H, W, c2w, view_bounds=(-1, 1, -1, 1), scale=1.0):
 
     # All rays have the same direction: negative z-axis in camera space transformed to world space
     rays_d = c2w[:3, :3] @ torch.tensor(
-        [0, 0, -1.0], dtype=c2w.dtype, device=c2w.device
+        [0, 0, -1.0], dtype=c2w.dtype
     )
     rays_d = rays_d.expand(rays_o.shape)
 

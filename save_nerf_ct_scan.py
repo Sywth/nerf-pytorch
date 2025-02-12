@@ -1,8 +1,11 @@
 import ast
 import torch
 import numpy as np
+import load_blender
+
 from pathlib import Path
-from run_nerf import create_nerf
+from run_nerf import create_nerf, render, get_rays_ortho, device
+
 
 class ArgsNamespace:
     """Custom namespace to mimic argparse.Namespace behavior."""
@@ -49,41 +52,48 @@ def parse_args(args_path):
     return ArgsNamespace(**args_dict)
 
 
-def generate_voxel_grid(model, grid_size, bbox_min, bbox_max, device):
-    """
-    Generates a voxel grid from a trained NeRF model.
+def get_image_at_pose(camera_pose : torch.Tensor, H : int, W: int, render_kwargs : dict):
+    assert render_kwargs.get(
+        "use_ortho", False
+    ), "Only orthographic cameras are supported."
 
-    Args:
-        model: Trained NeRF model.
-        grid_size (tuple): (H, W, D) dimensions of the voxel grid.
-        bbox_min (tuple): Minimum XYZ bounds of the volume.
-        bbox_max (tuple): Maximum XYZ bounds of the volume.
-        device: Torch device (CPU/GPU).
+    # Generate rays for the given camera pose
+    if render_kwargs.get("use_ortho", False):
+        rays_o, rays_d = get_rays_ortho(H, W, camera_pose)
+    else:
+        raise ValueError("Perspective camera not supported yet.")
 
-    Returns:
-        voxel_grid: (H, W, D, 4) array containing (r, g, b, sigma) values.
-    """
-    H, W, D = grid_size
-    x_lin = torch.linspace(bbox_min[0], bbox_max[0], H, device=device)
-    y_lin = torch.linspace(bbox_min[1], bbox_max[1], W, device=device)
-    z_lin = torch.linspace(bbox_min[2], bbox_max[2], D, device=device)
+    # Prepare ray batch
+    rays = torch.stack([rays_o, rays_d], 0)  # Shape: (2, H, W, 3)
+    rays = rays.reshape(2, -1, 3)  # Flatten rays for batch processing
 
-    # Create a 3D grid of points
-    x, y, z = torch.meshgrid(x_lin, y_lin, z_lin, indexing="ij")
-    points = torch.stack([x, y, z], dim=-1).view(-1, 3)  # Reshape to (H*W*D, 3)
+    # TODO : Figure out how to handle device placement cause idek what the actual fuck the original nerf script does 
+    rays = rays.to(device)
+    camera_pose = camera_pose.to(device)
 
-    # Query NeRF model (no view directions needed for static scene)
+    print("Rays device:", rays.device)
+    print("Camera pose device:", camera_pose.device)
+
+    # Perform rendering
     with torch.no_grad():
-        raw_output = model(points)
-        rgb = torch.sigmoid(raw_output[..., :3])  # (H*W*D, 3)
-        sigma = raw_output[..., 3:4]  # (H*W*D, 1)
-        voxel_values = torch.cat([rgb, sigma], dim=-1)  # (H*W*D, 4)
+        rgb_map, _, _, _ = render(
+            H,
+            W,
+            K=None,
+            chunk=1024 * 32,
+            rays=rays,
+            **render_kwargs,
+        )
 
-    return voxel_values.view(H, W, D, 4).cpu().numpy()  # Reshape back to 3D
+    # Reshape the output image
+    rgb_image = rgb_map.cpu().numpy().reshape(H, W, 3)
+
+    return np.clip(rgb_image, 0, 1)  # Ensure valid image range
 
 
 if __name__ == "__main__":
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    torch.cuda.empty_cache()
+
     base_path = Path("./logs/blender_paper_lego")
 
     # Load trained NeRF model
@@ -91,18 +101,18 @@ if __name__ == "__main__":
     render_kwargs_train, render_kwargs_test, _, _, _ = create_nerf(args)
     model = render_kwargs_train["network_fn"].to(device)
     model.eval()
+    H = render_kwargs_test
 
-    # Define voxel grid properties
-    grid_size = (128, 128, 128)  # Adjust as needed
-    bbox_min = (-1.0, -1.0, -1.0)  # Adjust bounds based on dataset
-    bbox_max = (1.0, 1.0, 1.0)
+    render_resolution = 256, 256
+    camera_pose = load_blender.pose_spherical(
+        theta=0.0,
+        phi=0.0,
+        radius=2.0,
+    )
 
-    # Generate voxel grid
-    # i dont what the fuck is worng with this line but this function needs to be fucking fixed lol aahaaha 
-    voxel_grid = generate_voxel_grid(model, grid_size, bbox_min, bbox_max, device)
-
-    # Save to file
-    save_path = base_path / "voxel_grid.npz"
-    np.savez_compressed(save_path, voxel_grid=voxel_grid)
-    print(f"Voxel grid saved at {save_path}")
-
+    get_image_at_pose(
+        camera_pose,
+        render_resolution[0],
+        render_resolution[1],
+        render_kwargs_test,
+    )

@@ -50,6 +50,7 @@ def run_network(inputs, viewdirs, fn, embed_fn, embeddirs_fn, netchunk=1024 * 64
         input_dirs = viewdirs[:, None].expand(inputs.shape)
         input_dirs_flat = torch.reshape(input_dirs, [-1, input_dirs.shape[-1]])
         embedded_dirs = embeddirs_fn(input_dirs_flat)
+
         embedded = torch.cat([embedded, embedded_dirs], -1)
 
     outputs_flat = batchify(fn, netchunk)(embedded)
@@ -189,6 +190,7 @@ def render_path(
     for i, c2w in enumerate(tqdm(render_poses)):
         print(i, time.time() - t)
         t = time.time()
+
         rgb, disp, acc, _ = render(
             H, W, K, chunk=chunk, c2w=c2w[:3, :4], **render_kwargs
         )
@@ -452,8 +454,8 @@ def render_rays(
         rays_o[..., None, :] + rays_d[..., None, :] * z_vals[..., :, None]
     )  # [N_rays, N_samples, 3]
 
-    #     raw = run_network(pts)
     raw = network_query_fn(pts, viewdirs, network_fn)
+
     rgb_map, disp_map, acc_map, weights, depth_map = raw2outputs(
         raw, z_vals, rays_d, raw_noise_std, white_bkgd, pytest=pytest
     )
@@ -1240,5 +1242,4 @@ def train():
 
 if __name__ == "__main__":
     torch.set_default_tensor_type("torch.cuda.FloatTensor")
-
     train()
