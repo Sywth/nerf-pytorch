@@ -78,6 +78,7 @@ class NeRF(nn.Module):
     ):
         """ """
         super(NeRF, self).__init__()
+
         self.D = D
         self.W = W
         self.input_ch = input_ch
