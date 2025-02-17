@@ -199,6 +199,13 @@ def rgb_to_mono(image):
 def lerp(v1, v2, t):
     return v1 + t * (v2 - v1)
 
+def psnr(img1 : np.ndarray, img2 : np.ndarray):
+    mse = np.mean((img1 - img2) ** 2)
+    if mse == 0:
+        return 100
+    PIXEL_MAX = 255.0
+    return 20 * np.log10(PIXEL_MAX / np.sqrt(mse))
+
 # %% [markdown]
 # Functions for NeRF
 

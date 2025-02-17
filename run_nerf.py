@@ -949,11 +949,7 @@ def train():
             )
 
             return
-
-    # NOTE : START RAY TEST PLOTTING
-    utils.make_plot_of_rays(K, poses[0, :3, :4], args.use_ortho)
-    # NOTE : END RAY TEST PLOTTING
-
+        
     # Prepare raybatch tensor if batching random rays
     N_rand = args.N_rand
     use_batching = not args.no_batching

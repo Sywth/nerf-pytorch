@@ -14,7 +14,7 @@ import run_nerf
 import ct_scan
 import utils
 
-
+# %%
 class ArgsNamespace:
     """Custom namespace to mimic argparse.Namespace behavior."""
 
@@ -31,7 +31,7 @@ class ArgsNamespace:
     def __repr__(self):
         return f"ArgsNamespace({self.__dict__})"
 
-
+# %%
 def parse_args(args_path):
     """Parses an args.txt file into an ArgsNamespace object."""
     args_dict = {}
@@ -59,6 +59,7 @@ def parse_args(args_path):
 
     return ArgsNamespace(**args_dict)
 
+# %%
 
 def get_image_at_pose(camera_pose: torch.Tensor, H: int, W: int, render_kwargs: dict):
     assert render_kwargs.get(
@@ -95,6 +96,7 @@ def get_image_at_pose(camera_pose: torch.Tensor, H: int, W: int, render_kwargs: 
 
     return rgb_image
 
+# %%
 
 def plot_iamge_at_theta(theta, hwf_rendering, render_kwargs_test):
     camera_pose = load_blender.pose_spherical(
@@ -113,6 +115,7 @@ def plot_iamge_at_theta(theta, hwf_rendering, render_kwargs_test):
     plt.imshow(rgb)
     plt.show()
 
+# %%
 
 def plot_nerf_path(args, hwf_rendering, render_kwargs_test, intervals=10):
     poses = [
@@ -142,6 +145,7 @@ def plot_nerf_path(args, hwf_rendering, render_kwargs_test, intervals=10):
         quality=8,
     )
 
+# %%
 
 def get_image_at_theta(theta_rad, hwf_rendering, render_kwargs_test, radius=2.0):
     camera_pose = load_blender.pose_spherical(
@@ -158,35 +162,44 @@ def get_image_at_theta(theta_rad, hwf_rendering, render_kwargs_test, radius=2.0)
     )
     return rgb
 
-
+# %%
 def interpolate_with_nerf(ct_imgs, angles_rad, hwf_rendering, render_kwargs_test):
-    interpolated_shape = (len(angles_rad) * 2, *ct_imgs.shape[1:])
-    interpolated_imgs = np.zeros(interpolated_shape)
-    angles = np.zeros(len(angles_rad) * 2)
+    N = len(angles_rad)
+    new_N = 2 * N  
+    interpolated_imgs = np.zeros((new_N, *ct_imgs.shape[1:]), dtype=ct_imgs.dtype)
+    interpolated_angles = np.zeros(new_N, dtype=angles_rad.dtype)
+    
+    interpolated_imgs[::2] = ct_imgs
+    interpolated_angles[::2] = angles_rad
+    
+    # lin interp angles from i to i+1 so we get 
+    #   [theta_{(i + i+1) / 2} for i in angles]
+    interp_angles = utils.lerp(angles_rad[:-1], angles_rad[1:], 0.5)
+    # lin interp angle between last and first
+    interp_angles = np.concatenate((interp_angles, [utils.lerp(angles_rad[-1], angles_rad[0], 0.5)]))
 
-    print("Interpolating views with NeRF...")
-    for i in trange(len(angles_rad) - 1):
-        theta1, theta2 = angles_rad[i], angles_rad[i + 1]
-        theta_interp = utils.lerp(theta1, theta2, 0.5)
-        angles[i * 2] = theta1
-        angles[i * 2 + 1] = theta_interp
+    interp_imgs = np.zeros((len(interp_angles), *ct_imgs.shape[1:]))
+    print(f"Interpolating {len(interp_angles)} images...")
+    for i in trange(len(interp_angles)):
+        theta = interp_angles[i]
+        img = get_image_at_theta(theta, hwf_rendering, render_kwargs_test)
+        interp_imgs[i] = utils.rgb_to_mono(img)
 
-        # Get interpolated view from NeRF
-        img_interp = get_image_at_theta(theta_interp, hwf_rendering, render_kwargs_test)
-        img_interp = utils.rgb_to_mono(img_interp)
-        interpolated_imgs[i * 2] = ct_imgs[i]  # Original
-        interpolated_imgs[i * 2 + 1] = img_interp
+    interpolated_imgs[1::2] = np.stack(interp_imgs, axis=0)
+    
+    return interpolated_imgs, interpolated_angles
 
-    # Last view, interpolate between index 0 amd -1
-    theta_interp = utils.lerp(angles_rad[-1], angles_rad[0], 0.5)
-    angles[-1] = theta_interp
+# # DEBUG : Overwrite the function for testing 
+# def interpolate_with_nerf(ct_imgs, angles_rad, hwf_rendering, render_kwargs_test):
+#     imgs = np.zeros((len(angles_rad), *ct_imgs.shape[1:]))
+#     for i in trange(len(angles_rad)):
+#         theta = angles_rad[i]
+#         img = get_image_at_theta(theta, hwf_rendering, render_kwargs_test)
+#         imgs[i] = utils.rgb_to_mono(img)
 
-    img_interp = get_image_at_theta(theta_interp, hwf_rendering, render_kwargs_test)
-    interpolated_imgs[-1] = utils.rgb_to_mono(img_interp)
+#     return imgs, angles_rad
 
-    return interpolated_imgs, angles
-
-
+# %%
 if __name__ == "__main__":
     torch.cuda.empty_cache()
     torch.set_default_tensor_type("torch.cuda.FloatTensor")
@@ -197,6 +210,8 @@ if __name__ == "__main__":
     args = parse_args(base_path / "args.txt")
     args.use_ortho = True
     args.chunk = 1024 * 8
+    args.white_bkgd = False
+    
     near = 2.0
     far = 6.0
     bounds = {
@@ -216,7 +231,7 @@ if __name__ == "__main__":
     # Plot and comaprins with NeRF using ASTRA
     phantom_idx = 13
     size = 128
-    num_scans = 50
+    num_scans = 15
     recon_iters = 48
     use_rgb = True
     hwf_rendering = (size, size, None)  # h, w, f
@@ -226,6 +241,18 @@ if __name__ == "__main__":
         phantom_shape=phantom.shape,
         num_scans=num_scans,
     )
+
+    # this -> Refers to creating full NeRF CT image ortho spin gif 
+        # TODO figure out how to get this to sync with the existing astra scan and line up nicely. 
+        # TODO figure out how to get this to 
+        # TODO Check if radius changes the nerf model, as it shouldn't as its orthographic
+        # TODO Figure out why background is white (1.0) when it should be black (0.0)
+
+        # TODO get rgb nerf to work (i.e. why doesnt my bottle dataset work, try bigger object?) 
+        # TODO Not sure why NeRFS are still bad when using 
+        #   my custom datasets (maybey something wrong with my matrix math / json parsing)
+        # TODO Get orthographic dataset working with bottle like nerf lego for closure 
+
     # TODO : This flawed as the actuall training data is stored in data/nerf_synthetic/...
     #   So in future use that instead
     ct_imgs = scan_params.generate_ct_imgs(phantom)
@@ -234,27 +261,6 @@ if __name__ == "__main__":
 
     sinogram = ct_imgs.swapaxes(0, 1)
     ct_recon = scan_params.reconstruct_3d_volume_alg(sinogram, recon_iters)
-
-    # START TBD : Quick Rendering Test for NeRF
-    angles = np.linspace(0, 2 * np.pi, 50)
-    imgs_shape = (len(angles), 128, 128)
-    imgs = np.zeros(imgs_shape)
-    for i, angle in enumerate(angles):
-        # TODO figure out how to get this to sync with the existing astra scan and line up nicely. 
-        # TODO figure out how to get this to 
-        # TODO Check if radius changes the nerf model, as it shouldn't as its orthographic
-        # TODO Figure out why background is white (1.0) when it should be black (0.0)
-        imgs[i] = utils.rgb_to_mono(
-            get_image_at_theta(-angle, hwf_rendering, render_kwargs_test)
-        )
-
-    utils.create_gif(
-        imgs,
-        angles,
-        "Angle {}",
-        f"./figs/temp/ct_nerf_neg.gif",
-    )
-    # END TBD  Quick Rendering Test for NeRF
 
     ct_imgs_interp, angles_interp = interpolate_with_nerf(
         ct_imgs, angles_rad, hwf_rendering, render_kwargs_test
@@ -274,23 +280,34 @@ if __name__ == "__main__":
     novel_view = utils.rgb_to_mono(novel_view)
 
     # Plotting
-    fig, axes = plt.subplots(3, 2, figsize=(12, 10))  # 2 rows, 2 columns
+    fig, axes = plt.subplots(1, 2, figsize=(8, 8))  
 
     # GT CT Scan View
-    axes[0, 0].imshow(ct_imgs[idx_angle])  # Note ideally we show the same angle as NeRF
-    axes[0, 0].set_title(f"CT View at {angles_rad[idx_angle]:.2f} Rad")
+    axes[0].imshow(ct_imgs[idx_angle])  # Note ideally we show the same angle as NeRF
+    axes[0].set_title(f"CT View at {angles_rad[idx_angle]:.2f} Rad")
 
     # Novel view from NeRF
-    axes[0, 1].imshow(novel_view)
-    axes[0, 1].set_title(f"NeRF View at {novel_angle:.2f} Rad")
+    axes[1].imshow(novel_view)
+    axes[1].set_title(f"NeRF View at {novel_angle:.2f} Rad")
 
-    # Reconstruction from GT sinogram
-    axes[1, 0].imshow(ct_recon[idx_slice])
-    axes[1, 0].set_title(f"SIRT Reconstruction from GT scans")
+    plt.tight_layout()
+    plt.show()
+
+    fig, axes = plt.subplots(1, 3, figsize=(16, 8))  
 
     # Reconstruction from interpolated sinogram
-    axes[1, 1].imshow(ct_recon_interp[idx_slice])
-    axes[1, 1].set_title("SIRT Reconstruction from Interpolated Scans")
+    axes[0].imshow(phantom[idx_slice])
+    axes[0].set_title("GT Slice")
+
+    # Reconstruction from GT sinogram
+    axes[1].imshow(ct_recon[idx_slice])
+    psnr = utils.psnr(ct_recon, phantom)
+    axes[1].set_title(f"SIRT Reconstruction from CT scans")
+
+    # Reconstruction from interpolated sinogram
+    axes[2].imshow(ct_recon_interp[idx_slice])
+    axes[2].set_title("SIRT Reconstruction from Interpolated Scans")
+
 
     plt.tight_layout()
     plt.show()
@@ -326,3 +343,5 @@ if __name__ == "__main__":
             "Reconstruction at slice {}",
             f"./figs/temp/ct_recon_gt_{suffix}.gif",
         )
+
+# %%
