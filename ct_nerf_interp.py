@@ -186,18 +186,19 @@ def interpolate_with_nerf(ct_imgs, angles_rad, hwf_rendering, render_kwargs_test
         interp_imgs[i] = utils.rgb_to_mono(img)
 
     interpolated_imgs[1::2] = np.stack(interp_imgs, axis=0)
+    interpolated_angles[1::2] = interp_angles
     
     return interpolated_imgs, interpolated_angles
 
-# # DEBUG : Overwrite the function for testing 
-# def interpolate_with_nerf(ct_imgs, angles_rad, hwf_rendering, render_kwargs_test):
-#     imgs = np.zeros((len(angles_rad), *ct_imgs.shape[1:]))
-#     for i in trange(len(angles_rad)):
-#         theta = angles_rad[i]
-#         img = get_image_at_theta(theta, hwf_rendering, render_kwargs_test)
-#         imgs[i] = utils.rgb_to_mono(img)
+# DEBUG : Overwrite the function for testing 
+def interpolate_with_nerf(ct_imgs, angles_rad, hwf_rendering, render_kwargs_test):
+    imgs = np.zeros((len(angles_rad), *ct_imgs.shape[1:]))
+    for i in trange(len(angles_rad)):
+        theta = angles_rad[i]
+        img = get_image_at_theta(theta, hwf_rendering, render_kwargs_test)
+        imgs[i] = utils.rgb_to_mono(img)
 
-#     return imgs, angles_rad
+    return imgs, angles_rad
 
 # %%
 if __name__ == "__main__":
@@ -226,7 +227,7 @@ if __name__ == "__main__":
     model = render_kwargs_train["network_fn"].to(device)
     model.eval()
 
-    render_gifs = False
+    render_gifs = True
 
     # Plot and comaprins with NeRF using ASTRA
     phantom_idx = 13
@@ -241,17 +242,6 @@ if __name__ == "__main__":
         phantom_shape=phantom.shape,
         num_scans=num_scans,
     )
-
-    # this -> Refers to creating full NeRF CT image ortho spin gif 
-        # TODO figure out how to get this to sync with the existing astra scan and line up nicely. 
-        # TODO figure out how to get this to 
-        # TODO Check if radius changes the nerf model, as it shouldn't as its orthographic
-        # TODO Figure out why background is white (1.0) when it should be black (0.0)
-
-        # TODO get rgb nerf to work (i.e. why doesnt my bottle dataset work, try bigger object?) 
-        # TODO Not sure why NeRFS are still bad when using 
-        #   my custom datasets (maybey something wrong with my matrix math / json parsing)
-        # TODO Get orthographic dataset working with bottle like nerf lego for closure 
 
     # TODO : This flawed as the actuall training data is stored in data/nerf_synthetic/...
     #   So in future use that instead
@@ -314,20 +304,22 @@ if __name__ == "__main__":
 
     if render_gifs:
         print("Creating GIFs...")
-
-        suffix = f"{phantom_idx}_{size}"
+        fps = 8
+        suffix = f"test-{phantom_idx}_{size}"
         utils.create_gif(
             ct_imgs_interp,
-            angles_interp,
+            angles_interp.round(3),
             "Scan at angle {}",
             f"./figs/temp/ct_nerf_interp_{suffix}.gif",
+            fps=fps,
         )
 
         utils.create_gif(
             ct_imgs,
-            angles_rad,
+            angles_rad.round(3),
             "Scan at angle {}",
             f"./figs/temp/ct_gt_{suffix}.gif",
+            fps=fps,
         )
 
         utils.create_gif(
@@ -335,6 +327,7 @@ if __name__ == "__main__":
             np.arange(ct_recon_interp.shape[0]),
             "Reconstruction at slice {}",
             f"./figs/temp/ct_recon_interp_{suffix}.gif",
+            fps=fps,
         )
 
         utils.create_gif(
@@ -342,6 +335,7 @@ if __name__ == "__main__":
             np.arange(ct_recon.shape[0]),
             "Reconstruction at slice {}",
             f"./figs/temp/ct_recon_gt_{suffix}.gif",
+            fps=fps,
         )
 
 # %%
