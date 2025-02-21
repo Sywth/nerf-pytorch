@@ -1,5 +1,6 @@
 # %%
-from typing import Any
+import os
+import json
 import numpy as np
 import astra
 import matplotlib.pyplot as plt
@@ -7,15 +8,15 @@ import tomophantom
 import trimesh
 import pyrender
 
-import os
-import json
-import utils
-
 from tomophantom import TomoP3D
 from pathlib import Path
 from dataclasses import dataclass
 from PIL import Image
 from scipy.ndimage import rotate
+from typing import Any
+
+import utils
+import ct_scan_debug
 
 # %% [markdown]
 # Setup initial consts / config
@@ -29,7 +30,6 @@ tomo_path = os.path.join(tomo_root_path, "phantomlib", "Phantom3DLibrary.dat")
 # %% [markdown]
 # ## CT Definitions
 #
-
 
 def save_phantom_gif(phantom, size):
     utils.create_gif(
@@ -54,22 +54,16 @@ class AstraScanParameters:
     proj_geom: Any | None = None
     vol_geom: Any | None = None
 
-    def __post_init__(self):
+    def re_init(self):
+        """
+        Reset using the current parameters
+        """
         self.vol_geom = astra.create_vol_geom(*self.phantom_shape)
-        angles = self.get_angles_rad()
         self.detector_resolution = (
             np.array(self.phantom_shape[:2]) / self.inv_res
         ).astype(int)
 
-        self.reset_angles(angles)
-
-    def get_angles_rad(self):
-        return np.linspace(
-            self.min_theta, self.max_theta, self.num_scans, endpoint=False
-        )
-    
-    def reset_angles(self, angles):
-        self.num_scans = len(angles)
+        angles = self.get_angles_rad()
         self.proj_geom = astra.create_proj_geom(
             "parallel3d",
             self.inv_res,  # DetectorSpacingX
@@ -77,6 +71,14 @@ class AstraScanParameters:
             self.detector_resolution[0],  # DetectorRowCount
             self.detector_resolution[1],  # DetectorColCount
             angles,  # ProjectionAngles
+        )
+
+    def __post_init__(self):
+        self.re_init()
+
+    def get_angles_rad(self):
+        return np.linspace(
+            self.min_theta, self.max_theta, self.num_scans, endpoint=False
         )
 
     def reconstruct_3d_volume_alg(self, sinogram, num_iterations=4):
@@ -124,12 +126,6 @@ class AstraScanParameters:
         return np.moveaxis(sinogram, 0, 1)
 
 
-# TESTED : Works with ASTRA (Use rotation_axis='x')
-def generate_camera_poses(angles: np.ndarray, radius: float = 4.0, axis="x"):
-    """"""
-    poses = [utils.compute_camera_matrix(theta, radius, axis) for theta in angles]
-    return poses
-
 
 # %%
 def load_phantom(phantom_idx=4, size=256):
@@ -149,8 +145,18 @@ def load_phantom(phantom_idx=4, size=256):
 
 
 def generate_scene(mesh_path, image_size, cam_pose, fov_deg, use_ortho=False):
-    mesh = trimesh.load(mesh_path)
-    mesh = pyrender.Mesh.from_trimesh(mesh)
+    assert use_ortho == False, "Orthographic camera not supported yet"
+    mesh_or_scene = trimesh.load(mesh_path)
+
+    if isinstance(mesh_or_scene, trimesh.Scene):
+        print("[SCENE GEN] Interpreting as 'Scene'")
+        meshes = [
+            pyrender.Mesh.from_trimesh(geometry)
+            for geometry in mesh_or_scene.geometry.values()
+        ]
+    else:
+        print("[SCENE GEN] Interpreting as 'Mesh'")
+        meshes = [pyrender.Mesh.from_trimesh(mesh_or_scene)]
 
     # yfov = xfov because aspectRatio = 1.0
     fov = np.deg2rad(fov_deg)
@@ -166,13 +172,11 @@ def generate_scene(mesh_path, image_size, cam_pose, fov_deg, use_ortho=False):
         color=np.array([0.08, 0.15, 0.90]),
         intensity=30.0,
     )
-    scene = pyrender.Scene()
+    bg_color = np.array([1.0, 0.0, 1.0, 0.0]) # Transparent background
+    scene = pyrender.Scene(bg_color=bg_color)
 
-    num_meshes = 4
-    for i in range(num_meshes):
-        node = scene.add(mesh)
-        y_pos = (i / 10) - 0.15
-        node.translation = np.array([0, y_pos, 0])
+    for mesh in meshes:
+        scene.add(mesh)
 
     camera_node = scene.add(camera, pose=cam_pose)
     scene.add(light1, pose=utils.compute_camera_matrix(np.pi / 2, 1, "y"))
@@ -181,29 +185,36 @@ def generate_scene(mesh_path, image_size, cam_pose, fov_deg, use_ortho=False):
     renderer = pyrender.OffscreenRenderer(*image_size)
     return scene, camera_node, renderer
 
-
+DEBUG = False
 def generate_projections(
+    mesh_path,
     num_views=16,
     image_size=(64, 64),
-    mesh_path="./data/objs/fuze/fuze.obj",
     fov_deg: float = 90,
 ):
     """Generates 2D projections from different viewpoints."""
 
     # Generate camera poses
     angles = np.linspace(0, 2 * np.pi, num_views, endpoint=False)
-    radius = 1.0
-    poses = generate_camera_poses(angles, radius=radius)
+    poses = utils.generate_camera_poses(angles, radius=4.0, axis="y")
 
     # Generate scene
     scene, camera_node, renderer = generate_scene(
         mesh_path, image_size, poses[0], fov_deg
     )
+    if DEBUG:
+        ct_scan_debug.add_cardinal_axes(scene, axis_length=1.0)
 
     images = []
+    flags =pyrender.RenderFlags.RGBA | 0
+
+    camera_translate = np.array([0, 0.5, 0.0])
+
     for i, pose in enumerate(poses):
+        pose[:3, 3] += camera_translate
         scene.set_pose(camera_node, pose=pose)
-        color, _ = renderer.render(scene)
+
+        color, _ = renderer.render(scene, flags=flags)
         images.append(color)
 
     renderer.delete()
@@ -217,6 +228,38 @@ def generate_projections(
 # NOTE : END : ADDITION
 # %%
 
+def rgb_to_rgba(imgs : np.ndarray) -> np.ndarray:
+    # (N, H, W, 3) -> (N, H, W, 4)
+    assert imgs.ndim == 4, "Must be N-array of (H,W,3) images"
+    assert imgs.shape[-1] == 3, "Must be rgb images"
+
+    alpha_channel = np.ones((*imgs.shape[:-1], 1), dtype=imgs.dtype)
+    rgba_imgs = np.concatenate([imgs, alpha_channel], axis=-1)
+    return rgba_imgs
+
+def remove_bg(imgs, white_threshold=0.0, black_threshold=0.05):
+    # (N, H, W, 4) -> (N, H, W, 4)
+    # Remove if pixel is 
+    assert imgs.ndim == 4, "Input must be 4D array"
+    assert imgs.shape[-1] == 4, "Input must be RGBA images"
+
+    rgb = imgs[..., :3]
+    alpha = imgs[..., 3:]
+
+    # White-bg mask : All rgb channels are above (1 - white_threshold)
+    white_mask = np.all(rgb >= (1.0 - white_threshold), axis=-1, keepdims=True)
+
+    # Black-bg mask : When all channels are below black_threshold
+    black_mask = np.all(rgb <= black_threshold, axis=-1, keepdims=True)
+
+    # Combine masks for both black and white background removal
+    bg_mask = white_mask | black_mask
+
+    # Set alpha to 0 for background pixels
+    alpha[bg_mask] = 0.0
+    imgs[..., 3:] = alpha
+
+    return imgs
 
 def acquire_ct_data(
     phantom: np.ndarray,
@@ -229,7 +272,11 @@ def acquire_ct_data(
         num_scans=num_scans,
     )
     ct_imgs = scan_params.generate_ct_imgs(phantom)
-    ct_poses = generate_camera_poses(scan_params.get_angles_rad())
+    ct_poses = utils.generate_camera_poses(
+        angles=scan_params.get_angles_rad(), 
+        radius=4.0,
+        axis="x"
+    )
 
     if use_rgb:
         ct_imgs = utils.mono_to_rgb(ct_imgs)
@@ -239,6 +286,10 @@ def acquire_ct_data(
     else:
         # we standardize the images
         ct_imgs = (ct_imgs - ct_imgs.mean()) / ct_imgs.std()
+
+    # Remove background and cast to RGBA
+    ct_imgs = rgb_to_rgba(ct_imgs)
+    ct_imgs = remove_bg(ct_imgs)
 
     return ct_imgs, ct_poses, scan_params.get_angles_rad()
 
@@ -274,11 +325,7 @@ def get_npz_dict(ct_imgs, ct_poses, angles, phantom, fov_deg):
     }
 
 
-remove_bg_threshold_white = 0.95
-remove_bg_threshold_black = 0.05
-
-
-def export_npz(npz, remove_bg=True):
+def export_npz(npz):
     # Define the export directory
     export_path = Path(
         f"export/ct_data_{phantom_idx}_{size}_{num_scans}_{np.random.randint(0, 1000)}/"
@@ -325,21 +372,6 @@ def export_npz(npz, remove_bg=True):
         split_dir = export_path / split_name
         for idx in indices:
             img = npz["images"][idx]  # Get the image
-            # add extra 1 to the image to make it RGBA
-            img = np.concatenate([img, np.ones(img.shape[:2] + (1,))], axis=-1)
-
-            if remove_bg:
-                # Extract the RGB channels (ignoring the alpha channel).
-                rgb = img[..., :3]
-
-                # Create boolean masks: a pixel is considered background if all RGB values are
-                # above the white threshold or below the black threshold.
-                white_mask = np.all(rgb >= remove_bg_threshold_white, axis=-1)
-                black_mask = np.all(rgb <= remove_bg_threshold_black, axis=-1)
-                bg_mask = np.logical_or(white_mask, black_mask)
-
-                # Set the alpha channel (4th channel) to 0 where the background mask is True.
-                img[..., 3][bg_mask] = 0
 
             # Scale to [0, 255] for saving and cast to uint8
             img = (img * 255).clip(0, 255).astype(np.uint8)
@@ -358,7 +390,7 @@ def export_npz(npz, remove_bg=True):
 # ### Export dataset
 if __name__ == "__main__":
 
-    ct_mode = False
+    ct_mode = True
     visible_mode = False
 
     phantom_idx = 13
@@ -376,9 +408,16 @@ if __name__ == "__main__":
     if visible_mode:
         fov_deg = 26.0
         visible_imgs, visible_poses, visible_angles = generate_projections(
-            num_views=num_scans, image_size=(size, size), fov_deg=fov_deg
+            "./data/objs/test_ct/test_ct.obj",
+            num_views=num_scans,
+            image_size=(size, size),
+            fov_deg=fov_deg,
         )
         npz_dict = get_npz_dict(
-            visible_imgs, visible_poses, visible_angles, phantom, fov_deg=fov_deg
+            visible_imgs,
+            visible_poses,
+            visible_angles,
+            phantom,
+            fov_deg=fov_deg,
         )
         export_npz(npz_dict)

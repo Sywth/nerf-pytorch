@@ -1,75 +1,102 @@
 {
-  "configurations": [
-    {
-      "name": "Python Debugger: Current File",
-      "type": "debugpy",
-      "request": "launch",
-      "program": "${file}",
-      "console": "integratedTerminal",
-      "args": [
-        "--config",
-        "configs/lego.txt",
-
-        "--dataset_type",
-        "blender",
-
-        "--i_video",
-        "250",
-        "--i_weights",
-        "250",
-        "--n_iters",
-        "1000",
-        "--fps",
-        "8",
-        "--chunk",
-        "8192"
-      ],
-      "args3": [
-        "--config",
-        "configs/lego.txt",
-
-        "--i_video",
-        "250",
-        "--i_weights",
-        "250",
-        "--n_iters",
-        "1000",
-
-        "--fps",
-        "30",
-
-        "--video_render_w",
-        "128",
-        "--video_render_h",
-        "128",
-
-        "--chunk",
-        "6144"
-      ],
-      "args2": [
-        "--config",
-        "configs/lego.txt",
-        "--i_video",
-        "250",
-        "--i_weights",
-        "250",
-        "--n_iters",
-        "1000",
-        "--chunk",
-        "8192",
-        "--video_export_pngs"
-      ],
-      "args1": [
-        "--config",
-        "configs/lego.txt",
-        "--render_only",
-        "--chunk",
-        "8192",
-        "--video_render_w",
-        "64",
-        "--video_render_h",
-        "64"
-      ]
-    }
-  ]
+    "configurations": [
+        {
+            "name": "Python Debugger: Current File",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${file}",
+            "console": "integratedTerminal",
+            "args": [
+                "--config",
+                "configs/ct_data_13_320_64_741.txt",
+                "--dataset_type",
+                "blender",
+                "--i_video",
+                "500",
+                "--i_weights",
+                "500",
+                "--n_iters",
+                "10000",
+                "--fps",
+                "8",
+                "--chunk",
+                "32768",
+                "--use_ortho"
+            ],
+            "blender-args": [
+                "--config",
+                "configs/ct_data_13_320_64_228.txt",
+                "--dataset_type",
+                "blender",
+                "--i_video",
+                "500",
+                "--i_weights",
+                "500",
+                "--n_iters",
+                "10000",
+                "--fps",
+                "8",
+                "--chunk",
+                "32768",
+            ],
+            "2args": [
+                "--config",
+                "configs/lego.txt",
+                "--dataset_type",
+                "blender",
+                "--i_video",
+                "1000",
+                "--i_weights",
+                "1000",
+                "--n_iters",
+                "10000",
+                "--fps",
+                "8",
+                "--chunk",
+                "32768",
+            ],
+            "args3": [
+                "--config",
+                "configs/lego.txt",
+                "--i_video",
+                "250",
+                "--i_weights",
+                "250",
+                "--n_iters",
+                "1000",
+                "--fps",
+                "30",
+                "--video_render_w",
+                "128",
+                "--video_render_h",
+                "128",
+                "--chunk",
+                "6144"
+            ],
+            "args2": [
+                "--config",
+                "configs/lego.txt",
+                "--i_video",
+                "250",
+                "--i_weights",
+                "250",
+                "--n_iters",
+                "1000",
+                "--chunk",
+                "8192",
+                "--video_export_pngs"
+            ],
+            "args1": [
+                "--config",
+                "configs/lego.txt",
+                "--render_only",
+                "--chunk",
+                "8192",
+                "--video_render_w",
+                "64",
+                "--video_render_h",
+                "64"
+            ]
+        }
+    ]
 }

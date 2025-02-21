@@ -156,6 +156,13 @@ def get_ct_cam_mats(
     return np.stack(mats)
 
 
+# TESTED : Works with ASTRA (Use rotation_axis='x')
+def generate_camera_poses(angles: np.ndarray, radius: float = 4.0, axis="x"):
+    """"""
+    poses = [compute_camera_matrix(theta, radius, axis) for theta in angles]
+    return poses
+
+    
 def rotate_phantom_by_pose(phantom: np.ndarray, cam_pose: np.ndarray):
     """
     Rotate the phantom by the camera pose.

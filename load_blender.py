@@ -6,7 +6,9 @@ import imageio
 import json
 import torch.nn.functional as F
 import cv2
+from pathlib import Path, PureWindowsPath
 
+import utils
 
 trans_t = lambda t: torch.Tensor(
     [[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, t], [0, 0, 0, 1]]
@@ -64,9 +66,14 @@ def load_blender_data(basedir, half_res=False, testskip=1):
             skip = testskip
 
         for frame in meta["frames"][::skip]:
-            fname = os.path.join(basedir, frame["file_path"] + ".png")
+            file_path = PureWindowsPath(basedir) / PureWindowsPath(frame["file_path"])
+            if file_path.suffix != ".png":
+                file_path = file_path.with_suffix(".png")
+            fname = file_path.as_posix()
+
             imgs.append(imageio.imread(fname))
             poses.append(np.array(frame["transform_matrix"]))
+
         imgs = (np.array(imgs) / 255.0).astype(np.float32)  # keep all 4 channels (RGBA)
         poses = np.array(poses).astype(np.float32)
         counts.append(counts[-1] + imgs.shape[0])
@@ -106,13 +113,32 @@ def load_blender_data(basedir, half_res=False, testskip=1):
     if not ortho_mode:
         focal = 0.5 * W / np.tan(0.5 * camera_angle_x)
 
+# NOTE : This is the original code, but i replaced it to work with my ct-rendering code 
+    # render_poses = torch.stack(
+    #     [
+    #         pose_spherical(angle, -30.0, 4.0)
+    #         for angle in np.linspace(-180, 180, 40 + 1)[:-1]
+    #     ],
+    #     0,
+    # )
+
+    number_of_angles = 8
+    angles_deg = np.linspace(-180, 180, number_of_angles, endpoint=False)
+    render_poses = utils.generate_camera_poses(
+        np.deg2rad(angles_deg), 
+        4.0,
+        "x",
+    )
+    # cast each pose to a torch and stack them
     render_poses = torch.stack(
-        [
-            pose_spherical(angle, -30.0, 4.0)
-            for angle in np.linspace(-180, 180, 40 + 1)[:-1]
-        ],
+        [torch.Tensor(pose) for pose in render_poses],
         0,
     )
+
+    # Translate each pose by trans 
+    # translation = torch.Tensor([0, 0.5, 0])
+    # render_poses[:, :3, 3] += translation
+    
 
     if half_res:
         H = H // 2

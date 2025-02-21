@@ -862,6 +862,7 @@ def train():
         H, W = hwf
         focal = None
     else:
+        # NOTE : If code fails here, you may need --use_ortho flag
         H, W, focal = hwf
     
     H, W = int(H), int(W)
@@ -994,7 +995,9 @@ def train():
     # writer = SummaryWriter(os.path.join(basedir, 'summaries', expname))
 
     # NOTE : Reduced number of poses to reduce video render times
-    render_poses = render_poses[::4]
+    # render_poses = render_poses[::4]
+    # NOTE : DEBUG : Added to change render_poses 
+    # render_poses = poses[::16]
 
     start = start + 1
     for i in trange(start, N_iters):
@@ -1081,6 +1084,16 @@ def train():
         trans = extras["raw"][..., -1]
         loss = img_loss
         psnr = mse2psnr(img_loss)
+
+        # NOTE : START DEBUG
+        # TODO check if the input iamges are as expected 
+        # plt.imshow(rgb.detach().cpu().numpy())
+        # plt.show()
+
+        # plt.imshow(target.reshape(H,W,3).detach().cpu().numpy())
+        # plt.show()
+        # NOTE : END DEBUG
+
 
         if "rgb0" in extras:
             img_loss0 = img2mse(extras["rgb0"], target_s)
