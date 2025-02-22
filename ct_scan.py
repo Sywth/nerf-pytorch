@@ -264,7 +264,7 @@ class AstraScanVec3D:
         # Rearranging axes if necessary (this step can be adjusted based on downstream use)
         return np.moveaxis(sinogram, 0, 1)
     
-    def reconstruct_3d_volume_sirt(self, sinogram, num_iterations=64):
+    def reconstruct_3d_volume_sirt(self, ct_imgs, num_iterations=64):
         """
         Reconstruct a 3D volume from the given sinogram data using the SIRT3D_CUDA algorithm.
         
@@ -281,6 +281,7 @@ class AstraScanVec3D:
         if self.proj_geom is None or self.vol_geom is None:
             raise ValueError("Projection geometry and volume geometry must be initialized.")
         
+        sinogram = ct_imgs.swapaxes(0, 1)
         sinogram_id = astra.data3d.create("-proj3d", self.proj_geom, sinogram)
         reconstruction_id = astra.data3d.create("-vol", self.vol_geom)
         
@@ -300,7 +301,7 @@ class AstraScanVec3D:
         
         return reconstruction
                 
-    def reconstruct_3d_volume_cgls(self, sinogram, num_iterations=64):
+    def reconstruct_3d_volume_cgls(self, ct_imgs, num_iterations=64):
         """
         Reconstruct a 3D volume from the given sinogram data using the CGLS3D_CUDA algorithm.
 
@@ -316,6 +317,8 @@ class AstraScanVec3D:
         """
         if self.proj_geom is None or self.vol_geom is None:
             raise ValueError("Projection geometry and volume geometry must be initialized.")
+
+        sinogram = ct_imgs.swapaxes(0, 1)
 
         # Create ASTRA data objects for the sinogram and reconstruction volume
         sinogram_id = astra.data3d.create("-proj3d", self.proj_geom, sinogram)
@@ -600,41 +603,20 @@ def export_npz(npz):
             img_pil.save(img_path)
 
     print(f"Dataset successfully exported to {export_path}")
-
-
-# %% [markdown]
-# ### Export dataset
-
-if __name__ == "__main__":
-    phantom_idx = 13
-    size = 256
-    num_scans = 16
-    use_rgb = True
-
-    phantom = load_phantom(phantom_idx, size)
-    euler_poses = np.array([
-        [0.0, theta, 0.0] for theta in np.linspace(0, np.pi, num_scans, endpoint=False)
-    ])
-
-    scan = AstraScanVec3D(
-        phantom.shape, euler_poses, img_res=256
-    )
-    ct_imgs = scan.generate_ct_imgs(phantom)
-
-    sinogram = ct_imgs.swapaxes(0, 1)
-
-    recon_cgls = scan.reconstruct_3d_volume_cgls(sinogram)
-    recon_sirt = scan.reconstruct_3d_volume_sirt(sinogram)
+# %%
+def plot_reconstructions(scan, ct_imgs, phantom, size, title="Reconstructions"):
+    recon_cgls = scan.reconstruct_3d_volume_cgls(ct_imgs)
+    recon_sirt = scan.reconstruct_3d_volume_sirt(ct_imgs)
     test_idx = (size // 2) 
 
     recon_cgls_slice = recon_cgls[test_idx]
     recon_sirt_slice = recon_sirt[test_idx]
     phantom_slice = phantom[test_idx]
-    psnr_cgls = utils.psnr(phantom_slice, recon_cgls_slice)
-    psnr_sirt = utils.psnr(phantom_slice, recon_sirt_slice)
-    
+    psnr_cgls = utils.psnr(phantom, recon_cgls)
+    psnr_sirt = utils.psnr(phantom, recon_sirt)
 
     fig, axs = plt.subplots(1, 3, figsize=(15, 5))
+    fig.suptitle(title) 
     axs[0].imshow(recon_cgls_slice, cmap="gray")
     axs[0].set_title(f"CGLS Reconstruction (PSNR: {psnr_cgls:.2f})")
     axs[1].imshow(recon_sirt_slice, cmap="gray")
@@ -642,6 +624,87 @@ if __name__ == "__main__":
     axs[2].imshow(phantom_slice, cmap="gray")
     axs[2].set_title("Phantom Ground Truth")
     plt.show()
+
+# %% [markdown]
+# ### Export dataset
+
+def lerp_ct_imgs(ct_imgs_even):
+    """
+    (N, H, W) -> (N * 2, H, W)
+    """
+    n = ct_imgs_even.shape[0]
+    ct_imgs_lerp = np.zeros((n * 2, *ct_imgs_even.shape[1:]), dtype=ct_imgs_even.dtype)
+    ct_imgs_lerp[::2] = ct_imgs_even
+    ct_imgs_odd = (ct_imgs_even[:-1] + ct_imgs_even[1:]) / 2
+    ct_imgs_odd = np.concatenate([ct_imgs_odd, [((ct_imgs_even[-1] + ct_imgs_even[0]) / 2)]])
+    ct_imgs_lerp[1::2] = ct_imgs_odd
+    return ct_imgs_lerp
+# %%
+import cv2
+
+def lanczos_ct_imgs(ct_imgs_even):
+    """
+    Interpolate sinogram images using Lanczos interpolation along the projection axis.
+    
+    For each pixel location (i,j), the 1D array over the N views is resized 
+    from length N to length 2N using cv2.resize with Lanczos interpolation.
+    The function ensures that the original sinogram values appear at even indices.
+    
+    Parameters:
+        ct_imgs_even (np.ndarray): Input sinogram of shape (N, H, W)
+        
+    Returns:
+        np.ndarray: Interpolated sinogram of shape (2N, H, W)
+    """
+    N, H, W = ct_imgs_even.shape
+    ct_imgs_interp = np.zeros((2 * N, H, W), dtype=ct_imgs_even.dtype)
+    
+    # Loop over spatial dimensions to interpolate along the sinogram (angle) axis
+    for i in range(H):
+        for j in range(W):
+            # Extract 1D signal for pixel (i, j)
+            col = ct_imgs_even[:, i, j].astype(np.float32)  # shape: (N,)
+            col = col.reshape(N, 1)  # treat as a column image of shape (N, 1)
+            # Resize from (N, 1) to (2N, 1) using Lanczos interpolation
+            col_interp = cv2.resize(col, (1, 2 * N), interpolation=cv2.INTER_LANCZOS4)
+            ct_imgs_interp[:, i, j] = col_interp[:, 0]
+    
+    # Ensure that the original views remain exactly at even indices
+    ct_imgs_interp[::2] = ct_imgs_even
+    return ct_imgs_interp
+    
+# %%
+if __name__ == "__main__":
+    phantom_idx = 13
+    size = 256
+    num_scans = 8
+    assert num_scans % 2 == 0, "Number of scans must be even"
+    use_rgb = True
+
+    phantom = load_phantom(phantom_idx, size)
+    euler_poses = np.array([
+        [0.0, theta, 0.0] for theta in np.linspace(0, np.pi, num_scans, endpoint=False)
+    ])
+
+    scan_2n = AstraScanVec3D(
+        phantom.shape, euler_poses, img_res=256
+    )
+    scan_n = AstraScanVec3D(
+        phantom.shape, euler_poses[::2], img_res=256
+    )
+    ct_imgs = scan_2n.generate_ct_imgs(phantom)
+
+    # Every 2nd image
+    ct_imgs_even = ct_imgs[::2]
+    ct_imgs_lanczos = lanczos_ct_imgs(ct_imgs_even)
+    ct_imgs_lerp = lerp_ct_imgs(ct_imgs_even)
+    # plot_reconstructions(ct_imgs_even, phantom, size, title=f"Reconstruction from {num_scans} views")
+
+    plot_reconstructions(scan_2n, ct_imgs, phantom, size, title=f"[Full Orignial] Reconstruction from {num_scans} views")
+    plot_reconstructions(scan_n, ct_imgs_even, phantom, size, title=f"[Half Orignial] Reconstruction from {num_scans / 2} views")
+
+    plot_reconstructions(scan_2n, ct_imgs_lerp, phantom, size, title=f"[Half Orignial, Half Lerp] Reconstruction from {num_scans} views")
+    plot_reconstructions(scan_2n, ct_imgs_lanczos, phantom, size, title=f"[Half Orignial, Half lanczos] Reconstruction from {num_scans} views")
 
 # %%
 def old():
