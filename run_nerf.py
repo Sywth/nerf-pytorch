@@ -768,10 +768,11 @@ def config_parser():
     return parser
 
 
-def train():
+def train(args):
 
-    parser = config_parser()
-    args = parser.parse_args()
+    # NOTE : DEBUG : I commented this out  
+    # parser = config_parser()
+    # args = parser.parse_args()
 
     # Load data
     K = None
@@ -1085,16 +1086,6 @@ def train():
         loss = img_loss
         psnr = mse2psnr(img_loss)
 
-        # NOTE : START DEBUG
-        # TODO check if the input iamges are as expected 
-        # plt.imshow(rgb.detach().cpu().numpy())
-        # plt.show()
-
-        # plt.imshow(target.reshape(H,W,3).detach().cpu().numpy())
-        # plt.show()
-        # NOTE : END DEBUG
-
-
         if "rgb0" in extras:
             img_loss0 = img2mse(extras["rgb0"], target_s)
             loss = loss + img_loss0
@@ -1251,4 +1242,9 @@ def train():
 
 if __name__ == "__main__":
     torch.set_default_tensor_type("torch.cuda.FloatTensor")
-    train()
+    # train()
+
+    # NOTE : DEBUG : I commented this out and replaced with the following
+    parser = config_parser()
+    args = parser.parse_args()
+    train(args)

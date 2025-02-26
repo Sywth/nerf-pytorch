@@ -4,6 +4,7 @@ import json
 import numpy as np
 import astra
 import matplotlib.pyplot as plt
+import torch
 import tomophantom
 import trimesh
 import pyrender
@@ -128,33 +129,9 @@ class AstraScanParameters:
 
 
 class AstraScanVec3D:
-    """
-    A class for 3D CT scanning using ASTRA's vector-based parallel beam geometry.
-    
-    Each projection is defined by a pose given as Euler angles (theta, phi, gamma)
-    using a Z-Y-X convention (i.e. R = Rz(theta) * Ry(phi) * Rx(gamma)). The
-    corresponding 12-element vector for ASTRA's "parallel3d_vec" geometry is computed 
-    from these angles.
-    
-    Attributes:
-        phantom_shape (tuple): The shape of the phantom volume.
-        euler_poses (np.ndarray): An array of Euler angle triples (theta, phi, gamma).
-        inv_res (float): Inverse resolution (used for detector spacing).
-        vol_geom: The volume geometry object.
-        proj_geom: The projection geometry object.
-        detector_resolution (np.ndarray): Resolution of the detector (rows, cols).
-    """
-    def __init__(self, phantom_shape, euler_poses, img_res = 64.0):
-        """
-        Initialize the scan parameters.
-        
-        Parameters:
-            phantom_shape (tuple): e.g., (Nx, Ny, Nz) for the 3D volume.
-            euler_poses (list or np.ndarray): List/array of (theta, phi, gamma) angles (in radians).
-            inv_res (float): Inverse resolution determining detector pixel size.
-        """
+    def __init__(self, phantom_shape, euler_angles, img_res = 64.0):
         self.phantom_shape = phantom_shape
-        self.euler_poses = np.array(euler_poses)  # shape: (num_projections, 3)
+        self.euler_angles = np.array(euler_angles)  # shape: (num_projections, 3)
         self.inv_res = phantom_shape[0] / img_res
         
         # These will be created in re_init()
@@ -165,13 +142,6 @@ class AstraScanVec3D:
         self.re_init()
     
     def re_init(self):
-        """
-        (Re)initialize the volume and projection geometry.
-        
-        This method creates the volume geometry and computes the detector resolution.
-        It then calculates the projection vectors based on the Euler poses and creates
-        the ASTRA projection geometry using 'parallel3d_vec'.
-        """
         self.vol_geom = astra.create_vol_geom(*self.phantom_shape)
         # Detector resolution derived from the phantom shape (using first two dimensions)
         self.detector_resolution = (np.array(self.phantom_shape[:2]) / self.inv_res).astype(int)
@@ -186,21 +156,9 @@ class AstraScanVec3D:
         )
     
     def _compute_projection_vectors(self):
-        """
-        Compute the projection vectors for each Euler pose.
-        
-        Returns:
-            np.ndarray: An array of shape (num_projections, 12) where each row is:
-                (rayX, rayY, rayZ, dX, dY, dZ, uX, uY, uZ, vX, vY, vZ)
-                
-        The vectors are computed by:
-          - Using (0,0,1) as the base ray direction.
-          - (1,0,0) and (0,1,0) as the base detector directions, scaled by the inverse resolution.
-          - Applying the rotation defined by each Euler angle triple.
-        """
-        num_projections = len(self.euler_poses)
+        num_projections = len(self.euler_angles)
         vectors = np.zeros((num_projections, 12), dtype=float)
-        for i, (theta, phi, gamma) in enumerate(self.euler_poses):
+        for i, (theta, phi, gamma) in enumerate(self.euler_angles):
             R = self._euler_to_rotation_matrix(theta, phi, gamma)
             # Define base directions:
             base_ray = np.array([0, 0, 1])
@@ -220,21 +178,57 @@ class AstraScanVec3D:
             vectors[i, 6:9] = u
             vectors[i, 9:12] = v
         return vectors
-    
+
     def _euler_to_rotation_matrix(self, theta, phi, gamma):
-        """
-        Convert Euler angles (theta, phi, gamma) to a rotation matrix using the Z-Y-X convention.
-
-        Parameters:
-            theta (float): Rotation angle around the Z-axis.
-            phi (float): Rotation angle around the Y-axis.
-            gamma (float): Rotation angle around the X-axis.
-            
-        Returns:
-            np.ndarray: A 3x3 rotation matrix.
-
-        """
         return Rotation.from_euler("ZYX", [theta, phi, gamma], degrees=False).as_matrix()
+
+    def get_ct_camera_poses(self, radius=2.0):
+        """
+        # TODO
+        This is not workign inline with astra but im going assume its fine for most 360 spin cases 
+        """
+        num_projections = len(self.euler_angles)
+        poses = np.zeros((num_projections, 4, 4), dtype=float)
+
+        # Obtain the 12-element vectors for each projection from the astra geometry.
+        vectors = astra.geom_2vec(self.proj_geom)['Vectors']
+
+        # With reference to astra https://astra-toolbox.com/docs/geom3d.html#projection-geometries
+            # ray : the ray direction
+            # d : the center of the detector
+            # u : the vector from detector pixel (0,0) to (0,1)
+            # v : the vector from detector pixel (0,0) to (1,0)
+
+        for i, (rayX, rayY, rayZ, dX, dY, dZ, uX, uY, uZ, vX, vY, vZ) in enumerate(vectors):
+            # Extract and normalize the ray direction.
+            ray = np.array([rayX, rayY, rayZ])
+            ray /= np.linalg.norm(ray)
+
+            # Use the 'u' vector to define the right direction (normalize it).
+            right = np.array([uX, uY, uZ])
+            right /= np.linalg.norm(right)
+
+            # Compute the camera's up vector to form a right-handed coordinate system.
+            # (Cross product of ray and right; note: order matters.)
+            up = np.cross(ray, right)
+            up /= np.linalg.norm(up)
+
+            # In our convention the camera looks along -z, so we want:
+            # R @ [0, 0, -1] = ray  =>  R's third column = -ray.
+            R = np.column_stack((right, up, -ray))
+
+            # Position the camera at -radius along the ray direction so that
+            # the vector from the camera to the origin is aligned with ray.
+            t = -radius * ray
+
+            # Build the 4x4 pose matrix (camera-to-world).
+            pose = np.eye(4, dtype=float)
+            pose[:3, :3] = R
+            pose[:3, 3] = t
+
+            poses[i] = pose
+
+        return poses
 
     def generate_ct_imgs(self, phantom):
         """
@@ -544,8 +538,11 @@ def get_npz_dict(ct_imgs, ct_poses, angles, phantom, fov_deg):
     }
 
 
-def export_npz(npz):
+def export_npz(npz, phantom_idx=None):
     # Define the export directory
+    size = npz["images"].shape[1]
+    num_scans = npz["images"].shape[0]
+
     export_path = Path(
         f"export/ct_data_{phantom_idx}_{size}_{num_scans}_{np.random.randint(0, 1000)}/"
     )
@@ -603,6 +600,8 @@ def export_npz(npz):
             img_pil.save(img_path)
 
     print(f"Dataset successfully exported to {export_path}")
+
+    return export_path
 # %%
 def plot_reconstructions(scan, ct_imgs, phantom, size, title="Reconstructions"):
     recon_cgls = scan.reconstruct_3d_volume_cgls(ct_imgs)
@@ -701,7 +700,7 @@ if __name__ == "__main__":
     # plot_reconstructions(ct_imgs_even, phantom, size, title=f"Reconstruction from {num_scans} views")
 
     plot_reconstructions(scan_2n, ct_imgs, phantom, size, title=f"[Full Orignial] Reconstruction from {num_scans} views")
-    plot_reconstructions(scan_n, ct_imgs_even, phantom, size, title=f"[Half Orignial] Reconstruction from {num_scans / 2} views")
+    plot_reconstructions(scan_n, ct_imgs_even, phantom, size, title=f"[Half Orignial] Reconstruction from {num_scans // 2} views")
 
     plot_reconstructions(scan_2n, ct_imgs_lerp, phantom, size, title=f"[Half Orignial, Half Lerp] Reconstruction from {num_scans} views")
     plot_reconstructions(scan_2n, ct_imgs_lanczos, phantom, size, title=f"[Half Orignial, Half lanczos] Reconstruction from {num_scans} views")

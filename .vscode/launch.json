@@ -6,6 +6,23 @@
             "request": "launch",
             "program": "${file}",
             "console": "integratedTerminal",
+            "x-args": [
+                "--config",
+                "configs/ct_data_13_256_64_684.txt",
+                "--dataset_type",
+                "blender",
+                "--i_video",
+                "250",
+                "--i_weights",
+                "250",
+                "--n_iters",
+                "1000",
+                "--fps",
+                "8",
+                "--chunk",
+                "32768",
+                "--use_ortho"
+            ],
             "args": [
                 "--config",
                 "configs/ct_data_13_320_64_741.txt",
