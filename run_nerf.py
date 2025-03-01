@@ -24,7 +24,7 @@ from load_LINEMOD import load_LINEMOD_data
 
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-np.random.seed(0)
+# np.random.seed(0) # NOTE : DEBUG : Commented out as i call train
 DEBUG = False
 
 
@@ -768,10 +768,11 @@ def config_parser():
     return parser
 
 
-def train():
+def train(args):
 
-    parser = config_parser()
-    args = parser.parse_args()
+    # NOTE : DEBUG : I commented this out  
+    # parser = config_parser()
+    # args = parser.parse_args()
 
     # Load data
     K = None
@@ -862,6 +863,7 @@ def train():
         H, W = hwf
         focal = None
     else:
+        # NOTE : If code fails here, you may need --use_ortho flag
         H, W, focal = hwf
     
     H, W = int(H), int(W)
@@ -994,7 +996,9 @@ def train():
     # writer = SummaryWriter(os.path.join(basedir, 'summaries', expname))
 
     # NOTE : Reduced number of poses to reduce video render times
-    render_poses = render_poses[::4]
+    # render_poses = render_poses[::4]
+    # NOTE : DEBUG : Added to change render_poses 
+    render_poses = poses[::8]
 
     start = start + 1
     for i in trange(start, N_iters):
@@ -1238,4 +1242,9 @@ def train():
 
 if __name__ == "__main__":
     torch.set_default_tensor_type("torch.cuda.FloatTensor")
-    train()
+    # train()
+
+    # NOTE : DEBUG : I commented this out and replaced with the following
+    parser = config_parser()
+    args = parser.parse_args()
+    train(args)
