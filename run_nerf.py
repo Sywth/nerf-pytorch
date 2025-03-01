@@ -24,7 +24,7 @@ from load_LINEMOD import load_LINEMOD_data
 
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-np.random.seed(0)
+# np.random.seed(0) # NOTE : DEBUG : Commented out as i call train
 DEBUG = False
 
 
@@ -998,7 +998,7 @@ def train(args):
     # NOTE : Reduced number of poses to reduce video render times
     # render_poses = render_poses[::4]
     # NOTE : DEBUG : Added to change render_poses 
-    # render_poses = poses[::16]
+    render_poses = poses[::8]
 
     start = start + 1
     for i in trange(start, N_iters):

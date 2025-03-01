@@ -33,7 +33,7 @@ rot_theta = lambda th: torch.Tensor(
 ).float()
 
 # NOTE : Consider copying this 
-def pose_spherical(theta, phi, radius):
+def pose_spherical_deg(theta, phi, radius):
     c2w = trans_t(radius)
     c2w = rot_phi(phi / 180.0 * np.pi) @ c2w
     c2w = rot_theta(theta / 180.0 * np.pi) @ c2w

@@ -195,13 +195,11 @@ def mono_to_rgb(image):
     """
     return np.stack([image] * 3, axis=-1)
 
-
 def rgb_to_mono(image):
     """
     Convert image.shape == (H, W, 3) to image.shape == (H, W)
     """
     return np.mean(image, axis=-1)
-
 
 def lerp(v1, v2, t):
     return v1 + t * (v2 - v1)

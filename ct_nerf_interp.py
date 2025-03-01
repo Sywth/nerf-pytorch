@@ -1,6 +1,8 @@
 import ast
 import os
 from pathlib import Path
+import random
+from typing import Literal
 
 import numpy as np
 import torch
@@ -49,10 +51,28 @@ def parse_args(args_path: Path) -> ArgsNamespace:
                     args_dict[key] = value
     return ArgsNamespace(**args_dict)
 
+# %% [markdown]
+# Scaling the CT images
+# %%
+MethodType = Literal["standardize", "normalize"]
+def scale_astra_ct_outputs(ct_imgs : np.ndarray, method : MethodType = "normalize"):
+    # NOTE : I think astra gives imgs in Hounsfield units
+    if method == "standardize":
+        ct_imgs  = (ct_imgs - ct_imgs.mean()) / ct_imgs.std()
+    if method == "normalize":
+        ct_imgs = (ct_imgs - ct_imgs.min()) / (ct_imgs.max() - ct_imgs.min())
+
+    return ct_imgs
+
+def scale_nerf_ct_outputs(ct_imgs : np.ndarray, method : MethodType = "normalize"):
+    if method == "standardize":
+        ct_imgs  = (ct_imgs - ct_imgs.mean()) / ct_imgs.std()
+    if method == "normalize":
+        ct_imgs = (ct_imgs - ct_imgs.min()) / (ct_imgs.max() - ct_imgs.min())
+
+    return ct_imgs
 
 # %%
-
-
 def get_image_at_pose(
     camera_pose: torch.Tensor, H: int, W: int, render_kwargs: dict
 ) -> np.ndarray:
@@ -78,7 +98,7 @@ def get_image_at_theta(
     theta_rad: float, hwf: tuple, render_kwargs: dict, radius: float = 2.0
 ) -> np.ndarray:
     """Render an image at a given theta (in radians)."""
-    camera_pose = load_blender.pose_spherical(
+    camera_pose = load_blender.pose_spherical_deg(
         theta=np.rad2deg(theta_rad), phi=0.0, radius=radius
     )
     rgb = get_image_at_pose(camera_pose, hwf[0], hwf[1], render_kwargs)
@@ -90,7 +110,7 @@ def get_image_at_theta(
 
 def plot_image_at_theta(theta: float, hwf: tuple, render_kwargs: dict):
     """Plot a rendered image at a given theta (degrees)."""
-    camera_pose = load_blender.pose_spherical(theta=theta, phi=0.0, radius=2.0)
+    camera_pose = load_blender.pose_spherical_deg(theta=theta, phi=0.0, radius=2.0)
     rgb = get_image_at_pose(camera_pose, hwf[0], hwf[1], render_kwargs)
     plt.imshow(rgb)
     plt.title(f"Image at {theta:.2f}°")
@@ -168,38 +188,46 @@ def get_model(path: Path | str):
     return model, render_kwargs_test
 
 
-def nerf_ct_imgs(ct_imgs_even, full_euler_poses, hwf, render_kwargs, full_nerf=False):
+def nerf_ct_imgs(ct_imgs_even, full_poses, hwf, render_kwargs, full_nerf=False):
     """
     (N, H, W) -> (N * 2, H, W)
-    full_euler_poses need to be in a maner where full_euler_poses[::2] corresponds to the given ct_imgs_even
+    full_euler_poses need to be in a manner where full_euler_poses[::2] corresponds to the given ct_imgs_even
     """
-    # cast euler poses to torch tensor
-    full_euler_poses = torch.Tensor(full_euler_poses)
+    # Cast euler poses to torch tensor
+    full_poses = torch.Tensor(full_poses)
 
     n = ct_imgs_even.shape[0]
     ct_imgs_full = np.zeros((n * 2, *ct_imgs_even.shape[1:]), dtype=ct_imgs_even.dtype)
 
     print(f"Interpolating {n} images with NeRF...")
     for i in trange(n):
-        img = get_image_at_pose(full_euler_poses[i], hwf[0], hwf[1], render_kwargs)
+        # we interpolate the odd indexes 
+        idx = 1 + (2 * i)
+        img = get_image_at_pose(full_poses[idx], hwf[0], hwf[1], render_kwargs)
         img = utils.rgb_to_mono(img)
-        ct_imgs_full[1 + (2 * i)] = img
+        ct_imgs_full[idx] = img
 
+    # NOTE : There is a somewhat fundamental flaw in that 
+    #   we scale to full range based on the interpolated images alone without consdering 
+    #   the full context that the astra images should be in. i.e. this will have systematic bias
+    #   However, the NeRF images allways seem to cap at 0.96 when the astra ones will by defintion cap a 1.0
+    ct_imgs_even = scale_nerf_ct_outputs(ct_imgs_even)
     ct_imgs_full[::2] = ct_imgs_even
 
     return ct_imgs_full
 
 
+
 def nerf_ct_imgs_full(
-    ct_imgs_even, full_euler_poses, hwf, render_kwargs, full_nerf=False
+    ct_imgs_even, full_poses, hwf, render_kwargs, full_nerf=False
 ):
-    full_euler_poses = torch.Tensor(full_euler_poses)
+    full_poses = torch.Tensor(full_poses)
 
     n = ct_imgs_even.shape[0]
     ct_imgs_full = np.zeros((n * 2, *ct_imgs_even.shape[1:]), dtype=ct_imgs_even.dtype)
     print(f"Interpolating {n} images with NeRF...")
     for i in trange(n * 2):
-        img = get_image_at_pose(full_euler_poses[i], hwf[0], hwf[1], render_kwargs)
+        img = get_image_at_pose(full_poses[i], hwf[0], hwf[1], render_kwargs)
         img = utils.rgb_to_mono(img)
         ct_imgs_full[i] = img
 
@@ -253,15 +281,14 @@ def train_nerf(config_path: str, video_ckpt : int = 250, weights_ckpt : int = 25
     ])
     train(args)
 
-def create_nerf_ds(phantom_idx, phantom, ct_imgs, ct_poses, ct_angles):
+def create_nerf_ds(phantom_idx, phantom, scaled_ct_imgs, ct_poses, ct_angles):
     fov_deg = float("inf")
 
-    ct_imgs = (ct_imgs - ct_imgs.min()) / (ct_imgs.max() - ct_imgs.min())
-    ct_imgs = utils.mono_to_rgb(ct_imgs)
-    ct_imgs = ct_scan.rgb_to_rgba(ct_imgs)
-    ct_imgs = ct_scan.remove_bg(ct_imgs)
+    scaled_ct_imgs = utils.mono_to_rgb(scaled_ct_imgs)
+    scaled_ct_imgs = ct_scan.rgb_to_rgba(scaled_ct_imgs)
+    scaled_ct_imgs = ct_scan.remove_bg(scaled_ct_imgs)
 
-    npz_dict = ct_scan.get_npz_dict(ct_imgs, ct_poses, ct_angles, phantom, fov_deg)
+    npz_dict = ct_scan.get_npz_dict(scaled_ct_imgs, ct_poses, ct_angles, phantom, fov_deg)
     return ct_scan.export_npz(npz_dict, phantom_idx)
 
 
@@ -280,236 +307,162 @@ def create_config(nerf_title, config_template_path="./configs/auto/ct_data_templ
 
     return Path(output_path)
 
+
+# %% [markdown]
+# ## Known Issues
+# TODO 
+#   - Fix the fact CT images are different range (0 - 1) than the scan (0 - 120) !!!
+#       - Evident by the colorbar plot in cell bellow 
+#   - Fix SSIM Computation in plotting 
+#   - Figure out why NeRF is worse the LERP (I think its because the range is not being normalized properly)
+#       - i.e. the range of the astra scans are being normalized but not in the sameway the MLP does it.
+
+#   - Once you have PSNR for CT-NeRF trained on 64 better than recon from 32 then move on training on 32 
+#   - Add novel optimization 
+#   - Do your write up 
+#   - Test on opaques 
+#   - Test on low to high image counts
+#   - Do in-fill tests 
+#   - Do novel addition thought up on train on friday 
+
 # %%
 if __name__ == "__main__":
-    # TODO : Generate the training set here with the identical features 
-    #   Then DO NOT touch anything, train the model and import it into here, even 
+    # RNG Seed for reproducibility
+    global_rng_seed = random.randint(0, 1000)
+    global_rng_seed = 42
+    print(f"Using seed {global_rng_seed}")
+    random.seed(global_rng_seed)
+    np.random.seed(global_rng_seed)
 
+    # GPU
     torch.cuda.empty_cache()
     torch.set_default_tensor_type("torch.cuda.FloatTensor")
 
-    # model_path = "./logs/3-ct_data_13_320_64_741"
-    # model, render_kwargs_test = get_model(model_path)
-
-    phantom_idx = 13
-    size = 256
-    num_scans = 64
+    # Phatom params 
+    phantom_idx = 16
+    ph_size = 256
+    num_scans = 32
     assert num_scans % 2 == 0, "Number of scans must be even"
-    hwf = (size, size, None)
-    use_rgb = True
-    
-    phantom = ct_scan.load_phantom(phantom_idx, size)
-    # phantom = np.ones_like(phantom) 
-    euler_angles = np.array(
-        [
-            [0.0, theta, 0.0]
-            for theta in np.linspace(0, np.pi, num_scans, endpoint=False)
-        ]
+
+    # scan parameters
+    radius = 2.0
+    img_res = 256
+    hwf = (img_res, img_res, None)
+
+    phantom = ct_scan.load_phantom(phantom_idx, ph_size)
+    spherical_angles = np.array([
+        [theta, 0.0] for theta in np.linspace(0, np.pi, num_scans, endpoint=False)
+    ])
+    poses = torch.stack([
+        load_blender.pose_spherical_deg(np.rad2deg(theta), np.rad2deg(phi), radius=radius)
+        for theta,phi in spherical_angles
+    ])
+
+    scan_2n = ct_scan.AstraScanVec3D(
+        phantom.shape, spherical_angles, img_res=img_res
     )
-    scan_n = ct_scan.AstraScanVec3D(phantom.shape, euler_angles[::2], img_res=256)
-    scan_2n = ct_scan.AstraScanVec3D(phantom.shape, euler_angles, img_res=256)
+    scan_n = ct_scan.AstraScanVec3D(
+        phantom.shape, spherical_angles[::2], img_res=img_res
+    )
     ct_imgs = scan_2n.generate_ct_imgs(phantom)
-
-    # NOTE : TODO : This is broken it seems to go the wrong way around 
-    euler_poses = scan_2n.get_ct_camera_poses(radius=2.0) 
-    # NOTE : DEBUG : QUICK FIX  
-    euler_poses = euler_poses[::-1].copy()
-
-    path_ds = create_nerf_ds(phantom_idx, phantom, ct_imgs, euler_poses, euler_angles)
-    path_cfg = create_config(path_ds.name)
-    # TODO : DEBUG : Right now this produces pure black images, 75 % guarntee its to width poses, 
-    #   Fix by comparing the old way of getting and saving ct_poses, compare to current (i.e. should produce the same json) and then pick the working one 
-    plt.imshow(ct_imgs[32])
-    plt.show()
-    # train_nerf(str(path_cfg))
+    ct_imgs = scale_astra_ct_outputs(ct_imgs)
 
 
-def old():
+    # Train the model
+    # TRAIN = True
+    TrainType = Literal["train new", "train existing", "load existing"]
+    train_type : TrainType = "load existing"
+    model_name : None | str = "ct_data_16_256_32_754"
+
+    if train_type == "train new":
+        path_ds = create_nerf_ds(phantom_idx, phantom, ct_imgs, poses, spherical_angles)
+        path_cfg = create_config(path_ds.name)
+        train_nerf(
+            config_path=str(path_cfg),
+            video_ckpt=2000,
+            weights_ckpt=1000,
+            n_iters=10000,
+        )
+        model_path = f"./logs/auto/{path_ds.name}"
+    
+    if train_type == "train existing":
+        path_cfg = f"./configs/auto/{model_name}.txt"
+        train_nerf(
+            config_path=path_cfg,
+            video_ckpt=2000,
+            weights_ckpt=1000,
+            n_iters=10000,
+        )
+        model_path = f"./logs/auto/{model_name}"
+
+    if train_type == "load existing":
+        model_path = f'./logs/auto/{model_name}'
+
+    # Load the model
+    model, render_kwargs_test = get_model(model_path)
+
+
     # Every 2nd image
     ct_imgs_even = ct_imgs[::2]
     ct_imgs_lanczos = ct_scan.lanczos_ct_imgs(ct_imgs_even)
     ct_imgs_lerp = ct_scan.lerp_ct_imgs(ct_imgs_even)
-    ct_imgs_nerf = nerf_ct_imgs(ct_imgs_even, euler_poses, hwf, render_kwargs_test)
-    ct_imgs_nerf_full = nerf_ct_imgs_full(
-        ct_imgs_even, euler_poses, hwf, render_kwargs_test
-    )
+    ct_imgs_nerf = nerf_ct_imgs(ct_imgs_even, poses, hwf, render_kwargs_test)
 
-    ct_scan.plot_reconstructions(
-        scan_2n,
-        ct_imgs,
-        phantom,
-        size,
-        title=f"[Full Orignial] Reconstruction from {num_scans} views",
-    )
-    ct_scan.plot_reconstructions(
-        scan_n,
-        ct_imgs_even,
-        phantom,
-        size,
-        title=f"[Half Orignial] Reconstruction from {num_scans // 2} views",
-    )
-    ct_scan.plot_reconstructions(
-        scan_2n,
-        ct_imgs_lerp,
-        phantom,
-        size,
-        title=f"[Half Orignial, Half Lerp] Reconstruction from {num_scans} views",
-    )
-    ct_scan.plot_reconstructions(
-        scan_2n,
-        ct_imgs_lanczos,
-        phantom,
-        size,
-        title=f"[Half Orignial, Half lanczos] Reconstruction from {num_scans} views",
-    )
-    ct_scan.plot_reconstructions(
-        scan_2n,
-        ct_imgs_nerf,
-        phantom,
-        size,
-        title=f"[Half Orignial, Half Nerf] Reconstruction from {num_scans} views",
-    )
-    ct_scan.plot_reconstructions(
-        scan_2n,
-        ct_imgs_nerf_full,
-        phantom,
-        size,
-        title=f"[Full Nerf] Reconstruction from {num_scans} views",
-    )
+    num_dp = 5
+    bp_cg_1, bp_si_1 = ct_scan.plot_reconstructions(scan_2n, ct_imgs, phantom, ph_size, title=f"[Full Orignial] Reconstructed Slice ({num_scans} views)", num_dp=num_dp)
+    bp_cg_2, bp_si_2 = ct_scan.plot_reconstructions(scan_n, ct_imgs_even, phantom, ph_size, title=f"[Half Orignial] Reconstructed Slice ({num_scans} views)" , num_dp=num_dp)
+    
+    bp_cg_3, bp_si_3 = ct_scan.plot_reconstructions(scan_2n, ct_imgs_lerp, phantom, ph_size, title=f"[Half Orignial, Half Lerp] Reconstructed Slice ({num_scans} views)", num_dp=num_dp)
+    bp_cg_4, bp_si_4 = ct_scan.plot_reconstructions(scan_2n, ct_imgs_lanczos, phantom, ph_size, title=f"[Half Orignial, Half lanczos] Reconstructed Slice ({num_scans} views)", num_dp=num_dp)
+    bg_cg_5, bp_si_5 = ct_scan.plot_reconstructions(scan_2n, ct_imgs_nerf, phantom, ph_size, title=f"[Half Orignial, Half Nerf] Reconstructed Slice ({num_scans} views)", num_dp=num_dp)
 
-    # Render gifs
-    RENDER_GIF = False
+    # Create GIFs of one interpolation method at a tiem 
+    RENDER_GIF = True
     if RENDER_GIF:
-        utils.create_gif(
-            images=ct_imgs_nerf,
-            labels=np.round(euler_angles, 3),
-            template_str = "Scan at angle {}",
-            output_filename="./figs/temp/cfp1.gif",
-            fps=8,
-        )
-        utils.create_gif(
-            images=ct_imgs,
-            labels=np.round(euler_angles, 3),
-            template_str = "Scan at angle {}",
-            output_filename="./figs/temp/cfp2.gif",
-            fps=8,
-        )
+        ct_imgs_interp = ct_imgs_nerf
+        method = "nerf"
 
-    visualize_camera_poses(scan_2n.get_ct_camera_poses())
-
-# %%
-def old():
-    # Device setup.
-    torch.cuda.empty_cache()
-    torch.set_default_tensor_type("torch.cuda.FloatTensor")
-
-    model, render_kwargs_test = get_model("./logs/ct_data_13_320_64_741")
-
-    # CT phantom and scan parameters.
-    phantom_idx = 13
-    size = 128
-    num_scans = 16  # Control: use 16 scans.
-    recon_iters = 48
-    hwf = (size, size, None)
-
-    min_theta_rad = 0.0
-    max_theta_rad = 2 * np.pi
-
-    phantom = ct_scan.load_phantom(phantom_idx, size)
-    scan_params = ct_scan.AstraScanParameters(
-        phantom_shape=phantom.shape,
-        num_scans=num_scans,
-        min_theta=min_theta_rad,
-        max_theta=max_theta_rad,
-    )
-
-    # Generate original CT sinogram and normalized images.
-    ct_imgs = scan_params.generate_ct_imgs(phantom)
-    ct_imgs = (ct_imgs - ct_imgs.min()) / (ct_imgs.max() - ct_imgs.min())
-    angles_rad = scan_params.get_angles_rad()
-
-    # Baseline CT reconstruction from original sinogram.
-    sinogram = ct_imgs.swapaxes(0, 1)
-    ct_recon = scan_params.reconstruct_3d_volume_alg(sinogram, recon_iters)
-
-    # NeRF interpolation: generate intermediate images.
-    ct_imgs_interp, angles_interp = interpolate_with_nerf(
-        ct_imgs, min_theta_rad, max_theta_rad, hwf, render_kwargs_test
-    )
-    sinogram_interp = ct_imgs_interp.swapaxes(0, 1)
-    # Prepare scan for interpolated sinogram.
-    scan_params.num_scans = len(angles_interp)
-    scan_params.re_init()
-    ct_recon_interp = scan_params.reconstruct_3d_volume_alg(
-        sinogram_interp, recon_iters
-    )
-
-    # Visualization: compare a representative CT slice and NeRF novel view.
-    idx_slice = (size - 1) // 2
-    mid_idx = (len(angles_rad) - 1) // 2
-    novel_angle = utils.lerp(angles_rad[mid_idx], angles_rad[mid_idx + 1], 0.5)
-    novel_view = utils.rgb_to_mono(
-        get_image_at_theta(novel_angle, hwf, render_kwargs_test)
-    )
-
-    fig, axes = plt.subplots(1, 2, figsize=(8, 8))
-    axes[0].imshow(ct_imgs[mid_idx])
-    axes[0].set_title(f"CT View at {angles_rad[mid_idx]:.2f} Rad")
-    axes[1].imshow(novel_view)
-    axes[1].set_title(f"NeRF View at {novel_angle:.2f} Rad")
-    plt.tight_layout()
-    plt.show()
-
-    fig, axes = plt.subplots(1, 3, figsize=(16, 8))
-    axes[0].imshow(phantom[idx_slice])
-    axes[0].set_title("GT Phantom Slice")
-    axes[1].imshow(ct_recon[idx_slice])
-    axes[1].set_title("SIRT Reconstruction (Original)")
-    axes[2].imshow(ct_recon_interp[idx_slice])
-    axes[2].set_title("SIRT Reconstruction (NeRF Interpolated)")
-    plt.tight_layout()
-    plt.show()
-
-    # Compute PSNR for quantitative comparison.
-    psnr_value = utils.psnr(ct_recon_interp, phantom)
-    print(f"PSNR (Reconstructed vs. Phantom): {psnr_value:.2f} dB")
-
-    # Optionally, create GIFs of the scans and reconstructions.
-    render_gifs = False
-    if render_gifs:
-        print("Creating GIFs...")
-        suffix = f"{phantom_idx}_{size}"
-        prefix = "only_"
-        utils.create_gif(
-            ct_imgs_interp,
-            np.round(angles_interp, 3),
-            "Scan at angle {}",
-            f"./figs/temp/{prefix}ct_nerf_interp_{suffix}.gif",
-            fps=16,
-        )
+        suffix = f"[{num_scans}]_cs2_"
         utils.create_gif(
             ct_imgs,
-            np.round(angles_rad, 3),
+            np.round(spherical_angles, 3),
             "Scan at angle {}",
-            f"./figs/temp/{prefix}ct_gt_{suffix}.gif",
+            f"./figs/temp/{suffix}ct_scan.gif",
             fps=8,
         )
-        utils.create_gif(
-            ct_recon_interp,
-            np.arange(ct_recon_interp.shape[0]),
-            "Reconstruction at slice {}",
-            f"./figs/temp/{prefix}ct_recon_interp_{suffix}.gif",
-            fps=12,
-        )
-        utils.create_gif(
-            ct_recon,
-            np.arange(ct_recon.shape[0]),
-            "Reconstruction at slice {}",
-            f"./figs/temp/{prefix}ct_recon_gt_{suffix}.gif",
-            fps=12,
-        )
 
-    pass
-
+        utils.create_gif(
+            ct_imgs_interp,
+            np.round(spherical_angles, 3),
+            "Scan at angle {}",
+            f"./figs/temp/{suffix}ct_scan_{method}.gif",
+            fps=8,
+        )
 
 # %%
+def compare(img_0, img_1, img_2 = None, img_3 = None):
+    n = 2 + int(img_2 is not None) + int(img_3 is not None)
+    fig, axes = plt.subplots(1, n, figsize=(16 + (n * 2),8))
+
+    im0 = axes[0].imshow(img_0)
+    axes[0].set_title("Original")
+
+    im1 = axes[1].imshow(img_1)
+    axes[1].set_title("NeRF")
+
+    if img_2 is not None:
+        im2 = axes[2].imshow(img_2)
+        axes[2].set_title("LeRP")
+
+    if img_3 is not None:
+        im1 = axes[3].imshow(img_3)
+        axes[3].set_title("Lanczos")
+
+    plt.tight_layout()
+    plt.show()
+
+# %%
+DEBUG = False
+if DEBUG:
+    for i,(intp, gt) in enumerate(zip(ct_imgs_nerf, ct_imgs)):
+        compare(gt, intp)
