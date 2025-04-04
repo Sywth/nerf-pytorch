@@ -231,49 +231,17 @@ class AstraScanVec3D:
         return reconstruction
 
 
-
-
 # %%
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+def get_image_at_theta(
+    theta_rad: float, hwf: tuple, render_kwargs: dict, radius: float = 2.0
+) -> np.ndarray:
+    """Render an image at a given theta (in radians)."""
+    camera_pose = load_blender.pose_spherical_deg(
+        theta=np.rad2deg(theta_rad), phi=0.0, radius=radius
+    )
+    rgb = get_image_at_pose(camera_pose, hwf[0], hwf[1], render_kwargs)
+    return rgb
 # %%
 
 
@@ -563,7 +531,97 @@ def old():
         )
 
     visualize_camera_poses(scan_2n.get_ct_camera_poses())
+# %%
 
+def compare(img_0, img_1, img_2=None, img_3=None):
+    n = 2 + int(img_2 is not None) + int(img_3 is not None)
+    fig, axes = plt.subplots(1, n, figsize=(16 + (n * 2), 8))
+
+    im0 = axes[0].imshow(img_0)
+    axes[0].set_title("Original")
+
+    im1 = axes[1].imshow(img_1)
+    axes[1].set_title("NeRF")
+
+    if img_2 is not None:
+        im2 = axes[2].imshow(img_2)
+        axes[2].set_title("LeRP")
+
+    if img_3 is not None:
+        im1 = axes[3].imshow(img_3)
+        axes[3].set_title("Lanczos")
+
+    plt.tight_layout()
+    plt.show()
+
+
+# %%
+DEBUG = False
+if DEBUG:
+    for i, (intp, gt) in enumerate(zip(ct_imgs_nerf, ct_imgs)):
+        compare(gt, intp)
+
+
+# %%
+
+
+def plot_image_at_theta(theta: float, hwf: tuple, render_kwargs: dict):
+    """Plot a rendered image at a given theta (degrees)."""
+    camera_pose = load_blender.pose_spherical_deg(theta=theta, phi=0.0, radius=2.0)
+    rgb = get_image_at_pose(camera_pose, hwf[0], hwf[1], render_kwargs)
+    plt.imshow(rgb)
+    plt.title(f"Image at {theta:.2f}°")
+    plt.show()
+
+# %%
+
+
+def interpolate_with_nerf(
+    given_ct_imgs: np.ndarray,
+    min_rad: float,
+    max_rad: float,
+    hwf: tuple[int, int, None],
+    render_kwargs: dict,
+):
+    N = len(given_ct_imgs)
+    new_N = 2 * N
+
+    out_angles = np.linspace(min_rad, max_rad, new_N, endpoint=False)
+
+    out_imgs = np.empty((new_N, *given_ct_imgs.shape[1:]), dtype=given_ct_imgs.dtype)
+    out_imgs[::2] = given_ct_imgs
+
+    print(f"Interpolating {N} images with NeRF...")
+    for i in trange(1, new_N, 2):
+        # for i in trange(new_N - 1, 0, -2):
+        img = get_image_at_theta(out_angles[i], hwf, render_kwargs)
+        img = utils.rgb_to_mono(img)
+        out_imgs[i] = img
+
+    return out_imgs, out_angles
+
+
+def interpolate_with_nerf(
+    given_ct_imgs: np.ndarray,
+    min_rad: float,
+    max_rad: float,
+    hwf: tuple[int, int, None],
+    render_kwargs: dict,
+):
+    N = len(given_ct_imgs)
+    new_N = N
+
+    out_angles = np.linspace(min_rad, max_rad, new_N, endpoint=False)
+
+    out_imgs = np.empty((new_N, *given_ct_imgs.shape[1:]), dtype=given_ct_imgs.dtype)
+
+    print(f"Interpolating {N} images with NeRF...")
+    for i in trange(new_N):
+        img = get_image_at_theta(out_angles[i], hwf, render_kwargs)
+        img = utils.rgb_to_mono(img)
+        out_imgs[i] = img
+
+    return out_imgs, out_angles
 # %%
 def old():
     # Device setup.

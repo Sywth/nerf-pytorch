@@ -11,11 +11,15 @@ from scipy.spatial.transform import Rotation
 from matplotlib import pyplot as plt
 from matplotlib.animation import FuncAnimation
 from scipy.ndimage import affine_transform
+from skimage.metrics import structural_similarity as ssim
 
+# %%
 def ceildiv(a, b):
     return -(-a // b)
 
-
+def get_concise_timestamp() -> str:
+    return datetime.datetime.now().strftime("%Y-%m-%d#%H:%M")
+# %%
 def extract_frames(
     video_path,
     output_folder,
@@ -210,6 +214,16 @@ def psnr(img1 : np.ndarray, img2 : np.ndarray):
         return 100
     PIXEL_MAX = 255.0
     return 20 * np.log10(PIXEL_MAX / np.sqrt(mse))
+
+def ssim_3d(gt, recon):
+    assert gt.shape == recon.shape, "Input arrays must have the same shape"
+    H, W, D = gt.shape
+    ssim_total = 0.0
+    value_range = gt.max() - gt.min()
+    for i in range(D):
+        ssim_value = ssim(gt[:, :, i], recon[:, :, i], data_range=value_range)
+        ssim_total += ssim_value
+    return ssim_total / D
 
 # %% [markdown]
 # Functions for NeRF
