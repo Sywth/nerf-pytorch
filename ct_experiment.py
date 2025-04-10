@@ -227,13 +227,19 @@ def inpaint_sinogram_slice_opencv(
     method: InpaintMethodFlagType,
     inpaint_radius: int = 3,
 ) -> np.ndarray:
+    """
+    NOTE : `sinogram_slice` must be normalized to [0, 1] before inpainting.
+    """
+    assert sinogram_slice.min() >= 0 and sinogram_slice.max() <= 1
+
     # OpenCV expects 8-bit or 32-bit single-channel float
-    sinogram_float = sinogram_slice.astype(np.float32)
+    sinogram_uint8 = (sinogram_slice * 255).clip(0, 255).astype(np.uint8)
     mask_uint8 = (mask_slice > 0).astype(np.uint8)
 
-    return cv2.inpaint(
-        sinogram_float, mask_uint8, inpaintRadius=inpaint_radius, flags=method
+    inpainted_sinogram_uint8 = cv2.inpaint(
+        sinogram_uint8, mask_uint8, inpaintRadius=inpaint_radius, flags=method
     )
+    return inpainted_sinogram_uint8.astype(np.float32) / 255.0
 
 
 def inpaint_sinogram_opencv(
@@ -408,7 +414,7 @@ all_phantoms = [
 titles_sino_plot = [
     "Full Sinogram",
     "Training Set Sinogram",
-    "Lerp Sinogram",
+    # "Lerp Sinogram",
     "NVS Sinogram",
     "Biharmonic Sinogram",
     "NS Sinogram",
@@ -418,7 +424,7 @@ titles_sino_plot = [
 all_ct_imgs = [
     ct_imgs_full,
     ct_imgs_train_set,
-    ct_imgs_lerp,
+    # ct_imgs_lerp,
     ct_imgs_nvs,
     ct_imgs_biharmonic,
     ct_imgs_ns,
@@ -437,24 +443,33 @@ class Method:
     reconstructed_images: np.ndarray
 
 
-def plot_methods(target_idx: int, methods: list[Method]):
+def plot_methods(target_idx: int, methods: list[Method], is_sinogram: bool = False):
     n_cols = 4
-    n_rows = math.ceil(len(methods) / n_cols)
+    len_methods = len(methods) + (1 if is_sinogram else 0)
+    n_rows = math.ceil(len_methods / n_cols)
     fig, axs = plt.subplots(
         n_rows, n_cols, figsize=(n_cols * 5.1, n_rows * 5), constrained_layout=True
     )
     axs = axs.flatten()
 
-    for i, method in enumerate(methods):
-        im = axs[i].imshow(
+    method_idx = 0
+    for i, ax in enumerate(axs):
+        # Skip the first subplot if it's a sinogram, as this where the GT is shown
+        if is_sinogram and i == 0:
+            continue
+
+        method = methods[method_idx]
+        method_idx += 1
+
+        im = ax.imshow(
             method.reconstructed_images[target_idx],
             cmap="gray",
             vmin=0,
             vmax=1,
             aspect="auto",
         )
-        axs[i].set_title(method.title, fontsize=20)
-        axs[i].axis("off")
+        ax.set_title(method.title, fontsize=20)
+        ax.axis("off")
 
     # remove empty subplots
     for i in range(len(axs)):
@@ -473,18 +488,33 @@ def plot_methods(target_idx: int, methods: list[Method]):
 MetricMethods = Literal["SSIM", "Absoulte Difference"]
 
 
-def compare_methods(target_idx: int, metric: MetricMethods, methods: list[Method]):
+def compare_methods(
+    target_idx: int,
+    metric: MetricMethods,
+    methods: list[Method],
+    is_sinogram: bool = False,
+):
     gt_method = methods[0]
 
     n_cols = 4
-    n_rows = math.ceil(len(methods) / n_cols)
+    len_methods = len(methods) + (1 if is_sinogram else 0)
+    n_rows = math.ceil(len_methods / n_cols)
     fig, axs = plt.subplots(
         n_rows, n_cols, figsize=(n_cols * 5.1, n_rows * 5), constrained_layout=True
     )
     axs = axs.flatten()
-    for i, method in enumerate(methods):
-        if i == 0:  # Skip GT
+
+    method_idx = 1
+    for i, ax in enumerate(axs):
+        if i == 0:
+            # we skip this as its where the GT is shown
             continue
+        if is_sinogram and i == 1:
+            # we skip this on sinogram as this what we compare to
+            continue
+
+        method = methods[method_idx]
+        method_idx += 1
 
         if metric == "SSIM":
             _, cmp_img = ssim(
@@ -499,8 +529,8 @@ def compare_methods(target_idx: int, metric: MetricMethods, methods: list[Method
                 - method.reconstructed_images[target_idx]
             )
 
-        im = axs[i].imshow(cmp_img, vmin=0, vmax=1, cmap="magma", aspect="auto")
-        axs[i].set_title(method.title, fontsize=20)
+        im = ax.imshow(cmp_img, vmin=0, vmax=1, cmap="magma", aspect="auto")
+        ax.set_title(method.title, fontsize=20)
 
     # remove empty subplots
     for i in range(len(axs)):
@@ -516,10 +546,10 @@ def compare_methods(target_idx: int, metric: MetricMethods, methods: list[Method
     plt.show()
 
 
-def evaluate_methods(target_idx: int, methods: list[Method]):
-    plot_methods(target_idx, methods)
-    compare_methods(target_idx, "Absoulte Difference", methods)
-    compare_methods(target_idx, "SSIM", methods)
+def evaluate_methods(target_idx: int, methods: list[Method], is_sinogram: bool = False):
+    plot_methods(target_idx, methods, is_sinogram)
+    compare_methods(target_idx, "Absoulte Difference", methods, is_sinogram)
+    compare_methods(target_idx, "SSIM", methods, is_sinogram)
 
 
 sliced_methods = [
@@ -528,6 +558,7 @@ sliced_methods = [
 evaluate_methods(
     len(gt_phantom) // 2,
     sliced_methods,
+    is_sinogram=False,
 )
 
 
@@ -538,7 +569,11 @@ sinogramed_methods = [
 ]
 idx = sinogramed_methods[0].reconstructed_images.shape[0] // 2
 
-evaluate_methods(idx, sinogramed_methods)
+evaluate_methods(
+    idx,
+    sinogramed_methods,
+    is_sinogram=True,
+)
 
 
 # %%
