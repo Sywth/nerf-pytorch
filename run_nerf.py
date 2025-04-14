@@ -27,8 +27,9 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 # np.random.seed(0) # NOTE : DEBUG : Commented out as i call train
 DEBUG = False
 
-# NOTE : DEBUG 
+# NOTE : DEBUG
 USE_MONO_CT = False
+
 
 def batchify(fn, chunk):
     """Constructs a version of 'fn' that applies to smaller batches."""
@@ -321,9 +322,12 @@ def create_nerf(args):
 
     ##########################
 
-
-    assert args.use_mono_ct == USE_MONO_CT, f"Inconsistent global : args.use_mono_ct={args.use_mono_ct}, USE_MONO_CT={USE_MONO_CT}"
-    assert not (args.use_mono_ct and args.use_viewdirs), "Cannot use_mono_ct and use_viewdirs at the same time."    
+    assert (
+        args.use_mono_ct == USE_MONO_CT
+    ), f"Inconsistent global : args.use_mono_ct={args.use_mono_ct}, USE_MONO_CT={USE_MONO_CT}"
+    assert not (
+        args.use_mono_ct and args.use_viewdirs
+    ), "Cannot use_mono_ct and use_viewdirs at the same time."
 
     render_kwargs_train = {
         "network_query_fn": network_query_fn,
@@ -335,7 +339,7 @@ def create_nerf(args):
         "use_viewdirs": args.use_viewdirs,
         "white_bkgd": args.white_bkgd,
         "raw_noise_std": args.raw_noise_std,
-        "use_ortho": args.use_ortho, # NOTE :Added 
+        "use_ortho": args.use_ortho,  # NOTE :Added
     }
 
     # NDC only good for LLFF-style forward facing data
@@ -350,7 +354,10 @@ def create_nerf(args):
 
     return render_kwargs_train, render_kwargs_test, start, grad_vars, optimizer
 
-def raw2outputs_poly(raw, z_vals, rays_d, raw_noise_std=0, white_bkgd=False, pytest=False):
+
+def raw2outputs_poly(
+    raw, z_vals, rays_d, raw_noise_std=0, white_bkgd=False, pytest=False
+):
     raw2alpha = lambda raw, dists, act_fn=F.relu: 1.0 - torch.exp(-act_fn(raw) * dists)
 
     dists = z_vals[..., 1:] - z_vals[..., :-1]
@@ -392,11 +399,16 @@ def raw2outputs_poly(raw, z_vals, rays_d, raw_noise_std=0, white_bkgd=False, pyt
 
     return rgb_map, disp_map, acc_map, weights, depth_map
 
-def raw2outputs_mono(raw, z_vals, rays_d, raw_noise_std=0, white_bkgd=False, pytest=False):
+
+def raw2outputs_mono(
+    raw, z_vals, rays_d, raw_noise_std=0, white_bkgd=False, pytest=False
+):
     # Compute distances between samples.
     dists = z_vals[..., 1:] - z_vals[..., :-1]
     # Append a large distance for the last interval.
-    dists = torch.cat([dists, torch.Tensor([1e10]).expand(dists[..., :1].shape).to(raw.device)], -1)
+    dists = torch.cat(
+        [dists, torch.Tensor([1e10]).expand(dists[..., :1].shape).to(raw.device)], -1
+    )
     # Multiply distances by the norm of ray directions.
     dists = dists * torch.norm(rays_d[..., None, :], dim=-1)
 
@@ -406,7 +418,9 @@ def raw2outputs_mono(raw, z_vals, rays_d, raw_noise_std=0, white_bkgd=False, pyt
         noise = torch.randn(raw[..., 0].shape, device=raw.device) * raw_noise_std
         if pytest:
             np.random.seed(0)
-            noise = torch.Tensor(np.random.rand(*list(raw[..., 0].shape)) * raw_noise_std).to(raw.device)
+            noise = torch.Tensor(
+                np.random.rand(*list(raw[..., 0].shape)) * raw_noise_std
+            ).to(raw.device)
 
     # Compute per-sample alpha from sigma.
     raw_sigma = raw[..., 0]
@@ -433,6 +447,7 @@ def raw2outputs_mono(raw, z_vals, rays_d, raw_noise_std=0, white_bkgd=False, pyt
         rgb_map = rgb_map + (1.0 - acc_map.unsqueeze(-1))
 
     return rgb_map, disp_map, acc_map, weights, depth_map
+
 
 def raw2outputs(raw, z_vals, rays_d, raw_noise_std=0, white_bkgd=False, pytest=False):
     """Transforms model's predictions to semantically meaningful values.
@@ -506,7 +521,7 @@ def render_rays(
     near, far = bounds[..., 0], bounds[..., 1]  # [-1,1]
 
     t_vals = torch.linspace(0.0, 1.0, steps=N_samples)
-    if not lindisp: 
+    if not lindisp:
         z_vals = near * (1.0 - t_vals) + far * (t_vals)
     else:
         z_vals = 1.0 / (1.0 / near * (1.0 - t_vals) + 1.0 / far * (t_vals))
@@ -539,7 +554,7 @@ def render_rays(
         raw, z_vals, rays_d, raw_noise_std, white_bkgd, pytest=pytest
     )
 
-    if N_importance > 0: 
+    if N_importance > 0:
         rgb_map_0, disp_map_0, acc_map_0 = rgb_map, disp_map, acc_map
 
         z_vals_mid = 0.5 * (z_vals[..., 1:] + z_vals[..., :-1])
@@ -568,7 +583,7 @@ def render_rays(
     ret = {"rgb_map": rgb_map, "disp_map": disp_map, "acc_map": acc_map}
     if retraw:
         ret["raw"] = raw
-    if N_importance > 0: 
+    if N_importance > 0:
         ret["rgb0"] = rgb_map_0
         ret["disp0"] = disp_map_0
         ret["acc0"] = acc_map_0
@@ -784,7 +799,7 @@ def config_parser():
     parser.add_argument(
         "--i_print",
         type=int,
-        default=100,
+        default=1_000,
         help="frequency of console printout and metric loggin",
     )
     parser.add_argument(
@@ -947,7 +962,7 @@ def train(args, psnrs=None):
     else:
         # NOTE : If code fails here, you may need --use_ortho flag
         H, W, focal = hwf
-    
+
     H, W = int(H), int(W)
     hwf = [H, W, focal]
 
@@ -1033,7 +1048,7 @@ def train(args, psnrs=None):
             )
 
             return
-        
+
     # Prepare raybatch tensor if batching random rays
     N_rand = args.N_rand
     use_batching = not args.no_batching
@@ -1079,7 +1094,7 @@ def train(args, psnrs=None):
 
     # NOTE : Reduced number of poses to reduce video render times
     # render_poses = render_poses[::4]
-    # NOTE : DEBUG : Added to change render_poses 
+    # NOTE : DEBUG : Added to change render_poses
     render_poses = poses[::8]
 
     start = start + 1
@@ -1164,8 +1179,8 @@ def train(args, psnrs=None):
 
         optimizer.zero_grad()
 
-       # NOTE : TODO : Consider if for the USE_MONO_CT case, we need to change the loss function
-       # NOTE : TODO : DEBUG : Fix the plotting and figure out how to do this properly 
+        # NOTE : TODO : Consider if for the USE_MONO_CT case, we need to change the loss function
+        # NOTE : TODO : DEBUG : Fix the plotting and figure out how to do this properly
         if DEBUG and i % 10 == 0:
             fig, axes = plt.subplots(1, 2, figsize=(10, 5))
             axes[0].imshow(rgb.detach().cpu().numpy())
@@ -1179,7 +1194,7 @@ def train(args, psnrs=None):
         trans = extras["raw"][..., -1]
         loss = img_loss
         psnr = mse2psnr(img_loss)
-        
+
         if "rgb0" in extras:
             img_loss0 = img2mse(extras["rgb0"], target_s)
             loss = loss + img_loss0
@@ -1223,7 +1238,12 @@ def train(args, psnrs=None):
             # Turn on testing mode
             with torch.no_grad():
                 rgbs, disps = render_path(
-                    render_poses, hwf_rendering, K, args.chunk, args.use_ortho, render_kwargs_test
+                    render_poses,
+                    hwf_rendering,
+                    K,
+                    args.chunk,
+                    args.use_ortho,
+                    render_kwargs_test,
                 )
 
             print("Done, saving", rgbs.shape, disps.shape)
@@ -1287,9 +1307,9 @@ def train(args, psnrs=None):
                 )
             print("Saved test set")
 
+        psnrs.append(psnr.item())
         if i % args.i_print == 0:
             tqdm.write(f"[TRAIN] Iter: {i} Loss: {loss.item()}  PSNR: {psnr.item()}")
-            psnrs.append(psnr.item())
 
             plt.plot(psnrs)
             plt.ylabel("PSNR")

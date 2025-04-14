@@ -63,6 +63,8 @@ ExperimentDataKey = Literal[
 
 # %%
 filename = "prev/limited_nerf_ph-16_scans-32_iters-10000@2025-03-12#22-39.pkl"
+filename = "sparse_scan_ph-4_scans-64_iters-1000@2025-04-14#18-17.pkl"
+# filename = "limited_scan_ph-4_scans-64_iters-10000@2025-04-14#17-04.pkl"
 path_to_data = Path(f"./results/{filename}")
 
 with open(path_to_data, "rb") as f:
@@ -146,7 +148,7 @@ if test_type == "limited scan":
         render_kwargs=render_kwargs_test,
         partial_indices=limited_indices,
     )
-    ct_imgs_lerp = lerp_ct_imgs(ct_train_set_imgs, len(ct_imgs_full), limited_indices)
+    # ct_imgs_lerp = lerp_ct_imgs(ct_train_set_imgs, len(ct_imgs_full), limited_indices)
 
 # %%
 if test_type == "sparse scan":
@@ -155,14 +157,19 @@ if test_type == "sparse scan":
         gt_phantom.shape, part_spherical_angles, img_res=img_res
     )
 
-    full_spherical_angles = experiment_data["train scan angles"]
-    full_scaner = ct_scan.AstraScanVec3D(
-        gt_phantom.shape, full_spherical_angles, img_res=img_res
-    )
-    ct_train_set_imgs = ct_imgs_full[::2]
-
-    # TODO : Is this right, never tested it
+    model, render_kwargs_test = ct_nerf_interp.get_model(experiment_data["model path"])
     limited_indices = list(range(0, len(ct_imgs_full), 2))
+    ct_train_set_imgs = ct_imgs_full[limited_indices]
+    hwf = (img_res, img_res, experiment_data["fov"])
+
+    ct_imgs_nvs = ct_nerf_interp.nerf_ct_imgs_limited(
+        ct_imgs_partial=ct_train_set_imgs,
+        full_poses=poses,
+        hwf=hwf,
+        render_kwargs=render_kwargs_test,
+        partial_indices=limited_indices,
+    )
+    ct_imgs_lerp = lerp_ct_imgs(ct_train_set_imgs, len(ct_imgs_full), limited_indices)
 
 # %% Create Train Set
 ct_imgs_train_set = np.zeros_like(ct_imgs_full)
@@ -595,3 +602,4 @@ title_df = f"metrics_{experiment_data['phantom index']}_{experiment_data['test t
 title_df = title_df.replace(" ", "_")
 
 df_metrics.to_csv(f"tables/{title_df}.csv", index=False)
+df_metrics

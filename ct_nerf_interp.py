@@ -301,6 +301,12 @@ def seed_rngs(global_rng_seed: int = 42):
     np.random.seed(global_rng_seed)
 
 
+# %%
+TestType = Literal["sparse scan", "limited scan"]
+TrainType = Literal["train new", "train existing", "load existing"]
+ScanType = Literal["parallel", "cone beam"]
+DEBUG = False
+
 # %% [markdown]
 # ## Known Issues
 # TODO
@@ -318,56 +324,149 @@ def seed_rngs(global_rng_seed: int = 42):
 #   - Do in-fill tests
 #   - Do novel addition thought up on train on friday
 
+
 # %%
-TestType = Literal["sparse scan", "limited scan"]
-TrainType = Literal["train new", "train existing", "load existing"]
-ScanType = Literal["parallel", "cone beam"]
-DEBUG = False
-if __name__ == "__main__":
+def train_and_save_nerf(
+    # Hyper params
+    n_iters=10_000,
+    video_ckpt=5_000,
+    weights_ckpt=5_000,
+    # Phantom & scan params
+    phantom_idx=4,
+    num_scans=32,
+    ph_size=256,
+    radius=2.0,
+    model_name: None | str = None,  # [MODIFY]
+    test_type: TestType = "limited scan",  # [MODIFY]
+    train_type: TrainType = "train new",  # Fixed for now
+    scan_type: ScanType = "parallel",  # Fixed for now
+):
+
     # GPU
     torch.cuda.empty_cache()
     torch.set_default_tensor_type("torch.cuda.FloatTensor")
 
-    # Hyper params
-    video_ckpt = 5_000
-    weights_ckpt = 5_000
-    n_iters = 10_000
-
-    video_ckpt = 250
-    weights_ckpt = 250
-    n_iters = 500
-
-    # Phantom & scan params
-    phantom_idx = 16
-    ph_size = 256
-    num_scans = 32
-
-    radius = 2.0
-    img_res = ph_size
-
     # Model
-    model_name: None | str = "ct_data_13_256_16_600"  # [MODIFY]
-    test_type: TestType = "limited scan"  # [MODIFY]
-    global_rng_seed = utils.str_title_hash(model_name)
+    proper_name = test_type.replace(" ", "_")
+    test_title_fn = f"{proper_name}_ph-{phantom_idx}_scans-{num_scans}_iters-{n_iters}"
+    print(f"Test title: {test_title_fn}")
+    global_rng_seed = utils.str_title_hash(test_title_fn)
     seed_rngs(global_rng_seed)
 
-    save_data = True
-    train_type: TrainType = "train new"  # Fixed for now
-    scan_type: ScanType = "parallel"  # Fixed for now
-
+    opt_kwargs = {}
     if test_type == "limited scan":
-        test_title = test_type.replace(" ", "_")
         test_desc_note = (
             "Limited Nerf using scans at limited angles as described in pattern"
         )
+        (
+            spherical_angles,
+            ct_imgs,
+            poses,
+            use_view_dirs,
+            use_mono_ct,
+            model_path,
+            phantom,
+            psnrs,
+            render_kwargs_test,
+            limited_spherical_angles,
+            limited_poses,
+            limited_indices,
+            pattern,
+        ) = limited_scan(
+            train_type=train_type,
+            phantom_idx=phantom_idx,
+            num_scans=num_scans,
+            n_iters=n_iters,
+            video_ckpt=video_ckpt,
+            weights_ckpt=weights_ckpt,
+            radius=radius,
+            ph_size=ph_size,
+            img_res=ph_size,
+        )
+
+        opt_kwargs.update(
+            {
+                "limited_spherical_angles": limited_spherical_angles,
+                "limited_poses": limited_poses,
+                "limited_indices": limited_indices,
+                "pattern": pattern,
+            }
+        )
 
     if test_type == "sparse scan":
-        test_title = test_type.replace(" ", "_")
         test_desc_note = "Sparse Nerf using even images as GT scan images"
 
+        (
+            spherical_angles,
+            ct_imgs,
+            poses,
+            use_view_dirs,
+            use_mono_ct,
+            model_path,
+            phantom,
+            psnrs,
+            render_kwargs_test,
+            spherical_angles_train,
+            poses_train,
+        ) = sparse_scan(
+            train_type=train_type,
+            phantom_idx=phantom_idx,
+            num_scans=num_scans,
+            n_iters=n_iters,
+            video_ckpt=video_ckpt,
+            weights_ckpt=weights_ckpt,
+            radius=radius,
+            ph_size=ph_size,
+            img_res=ph_size,
+        )
+        opt_kwargs.update(
+            {
+                "spherical_angles_train": spherical_angles_train,
+                "poses_train": poses_train,
+            }
+        )
 
-# %%
-if globals().get("test_type", None) == "limited scan":
+    save_data(
+        test_title_fn=test_title_fn,
+        phantom_idx=phantom_idx,
+        num_scans=num_scans,
+        n_iters=n_iters,
+        test_desc_note=test_desc_note,
+        ph_size=ph_size,
+        test_type=test_type,
+        scan_type=scan_type,
+        spherical_angles=spherical_angles,
+        ct_imgs=ct_imgs,
+        poses=poses,
+        use_view_dirs=use_view_dirs,
+        use_mono_ct=use_mono_ct,
+        model_path=model_path,
+        phantom=phantom,
+        psnrs=psnrs,
+        render_kwargs_test=render_kwargs_test,
+        global_rng_seed=global_rng_seed,
+        **opt_kwargs,
+    )
+
+
+def limited_scan(
+    # Core
+    train_type: TrainType = "train new",
+    # Independent
+    phantom_idx: int = 4,
+    num_scans: int = 32,
+    # Hyper params
+    n_iters: int = 10_000,
+    video_ckpt: int = 5_000,
+    weights_ckpt: int = 5_000,
+    radius: float = 2.0,
+    # Expected
+    ph_size: int = 256,
+    img_res: int = 256,
+    # Optional
+    model_name: None | str = "ct_data_13_256_16_600",  # [MODIFY]
+    process_model: bool = True,
+):
     # Phatom params
     assert num_scans % 8 == 0, "Number of scans must be a multiple of 8"
 
@@ -464,93 +563,128 @@ if globals().get("test_type", None) == "limited scan":
 
     # Load the model
     model, render_kwargs_test = get_model(model_path)
-    ct_imgs_nerf = nerf_ct_imgs_limited(
-        ct_imgs_partial=ct_imgs_limited,
-        full_poses=poses,
-        hwf=hwf,
-        render_kwargs=render_kwargs_test,
-        partial_indices=limited_indices,
-    )
 
-    num_dp = 5
-    bp_cg_1, bp_si_1 = ct_scan.plot_reconstructions(
-        scan_full,
-        ct_imgs,
-        phantom,
-        ph_size,
-        title=f"[Full Orignial] Reconstructed Slice ({num_scans} views)",
-        num_dp=num_dp,
-    )
-    bp_cg_2, bp_si_2 = ct_scan.plot_reconstructions(
-        scan_partial,
-        ct_imgs_limited,
-        phantom,
-        ph_size,
-        title=f"[Part Orignial] Reconstructed Slice ({len(limited_spherical_angles)} views)",
-        num_dp=num_dp,
-    )
-    bg_cg_5, bp_si_5 = ct_scan.plot_reconstructions(
-        scan_full,
-        ct_imgs_nerf,
-        phantom,
-        ph_size,
-        title=f"[Part Orignial, Part Nerf] Reconstructed Slice ({num_scans} views)",
-        num_dp=num_dp,
-    )
-    DEBUG = False
-    if DEBUG:
-        ct_imgs_full_nerf = nerf_ct_imgs_full(poses, hwf, render_kwargs_test)
-        bg_cg_6, bp_si_6 = ct_scan.plot_reconstructions(
+    if process_model:
+        ct_imgs_nerf = nerf_ct_imgs_limited(
+            ct_imgs_partial=ct_imgs_limited,
+            full_poses=poses,
+            hwf=hwf,
+            render_kwargs=render_kwargs_test,
+            partial_indices=limited_indices,
+        )
+
+        num_dp = 5
+        bp_cg_1, bp_si_1 = ct_scan.plot_reconstructions(
             scan_full,
-            ct_imgs_full_nerf,
+            ct_imgs,
             phantom,
             ph_size,
-            title=f"[Full Nerf] Reconstructed Slice ({num_scans} views)",
+            title=f"[Full Orignial] Reconstructed Slice ({num_scans} views)",
+            num_dp=num_dp,
+        )
+        bp_cg_2, bp_si_2 = ct_scan.plot_reconstructions(
+            scan_partial,
+            ct_imgs_limited,
+            phantom,
+            ph_size,
+            title=f"[Part Orignial] Reconstructed Slice ({len(limited_spherical_angles)} views)",
+            num_dp=num_dp,
+        )
+        bg_cg_5, bp_si_5 = ct_scan.plot_reconstructions(
+            scan_full,
+            ct_imgs_nerf,
+            phantom,
+            ph_size,
+            title=f"[Part Orignial, Part Nerf] Reconstructed Slice ({num_scans} views)",
             num_dp=num_dp,
         )
 
-    # Compute to save experiment data for later
-    bp_si_gt = bp_si_1
-    bp_cg_gt = bp_cg_1
-    bp_si_tr = bp_si_2
-    bp_cg_tr = bp_cg_2
-    bp_si_nvs = bp_si_5
-    bp_cg_nvs = bg_cg_5
+        if DEBUG:
+            ct_imgs_full_nerf = nerf_ct_imgs_full(poses, hwf, render_kwargs_test)
+            bg_cg_6, bp_si_6 = ct_scan.plot_reconstructions(
+                scan_full,
+                ct_imgs_full_nerf,
+                phantom,
+                ph_size,
+                title=f"[Full Nerf] Reconstructed Slice ({num_scans} views)",
+                num_dp=num_dp,
+            )
 
-    # Create GIFs of one interpolation method at a tiem
-    RENDER_GIF = False
-    if RENDER_GIF:
-        ct_imgs_infill = ct_imgs_nerf
-        method = "nerf"
+        # Compute to save experiment data for later
+        bp_si_gt = bp_si_1
+        bp_cg_gt = bp_cg_1
+        bp_si_tr = bp_si_2
+        bp_cg_tr = bp_cg_2
+        bp_si_nvs = bp_si_5
+        bp_cg_nvs = bg_cg_5
 
-        suffix = f"[{num_scans}]_limited_v3_"
-        utils.create_gif(
-            ct_imgs,
-            np.round(spherical_angles, 3),
-            "Scan at angle {}",
-            f"./figs/gifs/{suffix}ct_scan.gif",
-            fps=8,
-        )
+        # Create GIFs of one interpolation method at a tiem
+        RENDER_GIF = False
+        if RENDER_GIF:
+            ct_imgs_infill = ct_imgs_nerf
+            method = "nerf"
 
-        utils.create_gif(
-            ct_imgs_infill,
-            np.round(spherical_angles, 3),
-            "Scan at angle {}",
-            f"./figs/gifs/{suffix}ct_scan_{method}.gif",
-            fps=8,
-        )
+            suffix = f"[{num_scans}]_limited_v3_"
+            utils.create_gif(
+                ct_imgs,
+                np.round(spherical_angles, 3),
+                "Scan at angle {}",
+                f"./figs/gifs/{suffix}ct_scan.gif",
+                fps=8,
+            )
 
-        utils.create_gif(
-            ct_imgs_full_nerf,
-            np.round(spherical_angles, 3),
-            "Scan at angle {}",
-            f"./figs/gifs/{suffix}ct_scan_full_{method}.gif",
-            fps=8,
-        )
+            utils.create_gif(
+                ct_imgs_infill,
+                np.round(spherical_angles, 3),
+                "Scan at angle {}",
+                f"./figs/gifs/{suffix}ct_scan_{method}.gif",
+                fps=8,
+            )
+
+            utils.create_gif(
+                ct_imgs_full_nerf,
+                np.round(spherical_angles, 3),
+                "Scan at angle {}",
+                f"./figs/gifs/{suffix}ct_scan_full_{method}.gif",
+                fps=8,
+            )
+
+    return (
+        spherical_angles,
+        ct_imgs,
+        poses,
+        use_view_dirs,
+        use_mono_ct,
+        model_path,
+        phantom,
+        psnrs,
+        render_kwargs_test,
+        limited_spherical_angles,
+        limited_poses,
+        limited_indices,
+        pattern,
+    )
 
 
-# %%
-if globals().get("test_type", None) == "sparse scan":
+def sparse_scan(
+    # Core
+    train_type: TrainType = "train new",
+    # Independent
+    phantom_idx: int = 4,
+    num_scans: int = 32,
+    # Hyper params
+    n_iters: int = 10_000,
+    video_ckpt: int = 5_000,
+    weights_ckpt: int = 5_000,
+    radius: float = 2.0,
+    # Expected
+    ph_size: int = 256,
+    img_res: int = 256,
+    # Optional
+    model_name: None | str = "ct_data_13_256_16_600",  # [MODIFY]
+    process_model: bool = True,
+):
+
     # Phatom params
     assert num_scans % 8 == 0, "Number of scans must be a multiple of 8"
 
@@ -626,92 +760,131 @@ if globals().get("test_type", None) == "sparse scan":
     # Load the model
     model, render_kwargs_test = get_model(model_path)
 
-    # Every 2nd image
-    ct_imgs_lanczos = ct_scan.lanczos_ct_imgs(ct_imgs_train)
-    ct_imgs_lerp = ct_scan.lerp_ct_imgs(ct_imgs_train)
-    ct_imgs_nerf = nerf_ct_imgs(ct_imgs_train, poses, hwf, render_kwargs_test)
+    if process_model:
 
-    num_dp = 5
-    bp_cg_1, bp_si_1 = ct_scan.plot_reconstructions(
-        scan_2n,
-        ct_imgs,
-        phantom,
-        ph_size,
-        title=f"[Full Orignial] Reconstructed Slice ({num_scans} views)",
-        num_dp=num_dp,
-    )
-    bp_cg_2, bp_si_2 = ct_scan.plot_reconstructions(
-        scan_n,
-        ct_imgs_train,
-        phantom,
-        ph_size,
-        title=f"[Half Orignial] Reconstructed Slice ({num_scans // 2} views)",
-        num_dp=num_dp,
-    )
+        # Every 2nd image
+        ct_imgs_lanczos = ct_scan.lanczos_ct_imgs(ct_imgs_train)
+        ct_imgs_lerp = ct_scan.lerp_ct_imgs(ct_imgs_train)
+        ct_imgs_nerf = nerf_ct_imgs(ct_imgs_train, poses, hwf, render_kwargs_test)
 
-    bp_cg_3, bp_si_3 = ct_scan.plot_reconstructions(
-        scan_2n,
-        ct_imgs_lerp,
-        phantom,
-        ph_size,
-        title=f"[Half Orignial, Half Lerp] Reconstructed Slice ({num_scans} views)",
-        num_dp=num_dp,
-    )
-    bp_cg_4, bp_si_4 = ct_scan.plot_reconstructions(
-        scan_2n,
-        ct_imgs_lanczos,
-        phantom,
-        ph_size,
-        title=f"[Half Orignial, Half lanczos] Reconstructed Slice ({num_scans} views)",
-        num_dp=num_dp,
-    )
-    bg_cg_5, bp_si_5 = ct_scan.plot_reconstructions(
-        scan_2n,
-        ct_imgs_nerf,
-        phantom,
-        ph_size,
-        title=f"[Half Orignial, Half Nerf] Reconstructed Slice ({num_scans} views)",
-        num_dp=num_dp,
-    )
-
-    # Compute to save experiment data for later
-    bp_si_gt = bp_si_1
-    bp_cg_gt = bp_cg_1
-    bp_si_tr = bp_si_2
-    bp_cg_tr = bp_cg_2
-    bp_si_nvs = bp_si_5
-    bp_cg_nvs = bg_cg_5
-
-    # Create GIFs of one interpolation method at a tiem
-    RENDER_GIF = False
-    if RENDER_GIF:
-        ct_imgs_interp = ct_imgs_nerf
-        method = "nerf"
-
-        suffix = f"[{num_scans}]_cs2_"
-        utils.create_gif(
+        num_dp = 5
+        bp_cg_1, bp_si_1 = ct_scan.plot_reconstructions(
+            scan_2n,
             ct_imgs,
-            np.round(spherical_angles, 3),
-            "Scan at angle {}",
-            f"./figs/temp/{suffix}ct_scan.gif",
-            fps=8,
+            phantom,
+            ph_size,
+            title=f"[Full Orignial] Reconstructed Slice ({num_scans} views)",
+            num_dp=num_dp,
+        )
+        bp_cg_2, bp_si_2 = ct_scan.plot_reconstructions(
+            scan_n,
+            ct_imgs_train,
+            phantom,
+            ph_size,
+            title=f"[Half Orignial] Reconstructed Slice ({num_scans // 2} views)",
+            num_dp=num_dp,
         )
 
-        utils.create_gif(
-            ct_imgs_interp,
-            np.round(spherical_angles, 3),
-            "Scan at angle {}",
-            f"./figs/temp/{suffix}ct_scan_{method}.gif",
-            fps=8,
+        bp_cg_3, bp_si_3 = ct_scan.plot_reconstructions(
+            scan_2n,
+            ct_imgs_lerp,
+            phantom,
+            ph_size,
+            title=f"[Half Orignial, Half Lerp] Reconstructed Slice ({num_scans} views)",
+            num_dp=num_dp,
+        )
+        bp_cg_4, bp_si_4 = ct_scan.plot_reconstructions(
+            scan_2n,
+            ct_imgs_lanczos,
+            phantom,
+            ph_size,
+            title=f"[Half Orignial, Half lanczos] Reconstructed Slice ({num_scans} views)",
+            num_dp=num_dp,
+        )
+        bg_cg_5, bp_si_5 = ct_scan.plot_reconstructions(
+            scan_2n,
+            ct_imgs_nerf,
+            phantom,
+            ph_size,
+            title=f"[Half Orignial, Half Nerf] Reconstructed Slice ({num_scans} views)",
+            num_dp=num_dp,
         )
 
-# %%
+        # Compute to save experiment data for later
+        bp_si_gt = bp_si_1
+        bp_cg_gt = bp_cg_1
+        bp_si_tr = bp_si_2
+        bp_cg_tr = bp_cg_2
+        bp_si_nvs = bp_si_5
+        bp_cg_nvs = bg_cg_5
+
+        # Create GIFs of one interpolation method at a tiem
+        RENDER_GIF = False
+        if RENDER_GIF:
+            ct_imgs_interp = ct_imgs_nerf
+            method = "nerf"
+
+            suffix = f"[{num_scans}]_cs2_"
+            utils.create_gif(
+                ct_imgs,
+                np.round(spherical_angles, 3),
+                "Scan at angle {}",
+                f"./figs/temp/{suffix}ct_scan.gif",
+                fps=8,
+            )
+
+            utils.create_gif(
+                ct_imgs_interp,
+                np.round(spherical_angles, 3),
+                "Scan at angle {}",
+                f"./figs/temp/{suffix}ct_scan_{method}.gif",
+                fps=8,
+            )
+
+    return (
+        spherical_angles,
+        ct_imgs,
+        poses,
+        use_view_dirs,
+        use_mono_ct,
+        model_path,
+        phantom,
+        psnrs,
+        render_kwargs_test,
+        spherical_angles_train,
+        poses_train,
+    )
 
 
-# %%
 # Save data for evaluation later
-if globals().get("save_data", False):
-    test_title_fn = f"{test_title}_ph-{phantom_idx}_scans-{num_scans}_iters-{n_iters}"
+def save_data(
+    test_title_fn,
+    phantom_idx,
+    num_scans,
+    n_iters,
+    test_desc_note,
+    ph_size,
+    test_type,
+    scan_type,
+    spherical_angles,
+    ct_imgs,
+    poses,
+    use_view_dirs,
+    use_mono_ct,
+    model_path,
+    phantom,
+    psnrs,
+    render_kwargs_test,
+    global_rng_seed,
+    # Limited only
+    limited_spherical_angles=None,
+    limited_poses=None,
+    limited_indices=None,
+    pattern=None,
+    # Sparse only
+    spherical_angles_train=None,
+    poses_train=None,
+):
 
     experiment_data = {
         "test title": test_title_fn,
@@ -731,12 +904,6 @@ if globals().get("save_data", False):
         "used ortho": True,
         "fov": False,
         "GT phantom": phantom,
-        "GT Reconstructed SIRT": bp_si_gt,
-        "GT Reconstructed CGLS": bp_cg_gt,
-        "Train Reconstructed SIRT": bp_si_tr,
-        "Train Reconstructed CGLS": bp_cg_tr,
-        "NVS SIRT": bp_si_nvs,
-        "NVS CGLS": bp_cg_nvs,
         "psnrs": psnrs,
         "render kwargs": str(render_kwargs_test),
         "created at": utils.get_concise_timestamp(),
@@ -769,3 +936,22 @@ if globals().get("save_data", False):
         pickle.dump(experiment_data, f)
 
     print(f"Experiment data saved at {data_save_path}")
+
+
+# %%
+if __name__ == "__main__":
+    ph_indexes = [4, 13, 16]
+    for ph_idx in ph_indexes:
+        train_and_save_nerf(
+            # Real
+            n_iters=10_000,
+            video_ckpt=1_000,
+            weights_ckpt=1_000,
+            # Test
+            # n_iters=1_000,
+            # video_ckpt=250,
+            # weights_ckpt=250,
+            phantom_idx=ph_idx,
+            num_scans=64,
+            test_type="sparse scan",
+        )

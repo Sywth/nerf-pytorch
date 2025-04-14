@@ -6,6 +6,7 @@ import torch
 import datetime
 import random
 import string
+import hashlib
 
 from scipy.spatial.transform import Rotation
 from matplotlib import pyplot as plt
@@ -23,8 +24,11 @@ def get_concise_timestamp() -> str:
     return datetime.datetime.now().strftime("%Y-%m-%d#%H-%M")
 
 
-def str_title_hash(string) -> str:
-    return int.from_bytes(string.encode(), "big") % 2**32
+def str_title_hash(string: str, base=257, mod=2**32) -> int:
+    hash_val = 0
+    for c in string:
+        hash_val = (hash_val * base + ord(c)) % mod
+    return hash_val
 
 
 # %%
