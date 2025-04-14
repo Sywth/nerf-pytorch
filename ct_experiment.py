@@ -7,7 +7,6 @@ import torch
 import pandas as pd
 import tqdm
 import cv2
-import cvxpy as cp
 
 import ct_nerf_interp
 import ct_scan
@@ -63,7 +62,7 @@ ExperimentDataKey = Literal[
 ]
 
 # %%
-filename = "sparse_nerf_ph:16_scans:32_iters:10000@2025-03-12#22:39.pkl"
+filename = "prev/limited_nerf_ph-16_scans-32_iters-10000@2025-03-12#22-39.pkl"
 path_to_data = Path(f"./results/{filename}")
 
 with open(path_to_data, "rb") as f:
@@ -576,34 +575,125 @@ evaluate_methods(
 )
 
 
-# %%
-def get_metrics(
-    phantom: np.ndarray,
-    methods: list[Method],
-):
+# %% Get metrics
+def get_metrics_phantom(gt_phantom: np.ndarray, methods: list[Method]) -> pd.DataFrame:
     metrics = []
     for method in methods:
-        ssim_val = utils.ssim_3d(method.reconstructed_images, phantom)
-        psnr_val = utils.psnr(method.reconstructed_images, phantom)
+        ssim_val = utils.ssim_3d(method.reconstructed_images, gt_phantom)
+        psnr_val = utils.psnr(method.reconstructed_images, gt_phantom)
         metrics.append((method.title, ssim_val, psnr_val))
-    return metrics
-
-
-metrics_for_slices = get_metrics(gt_phantom, sliced_methods)
-df_metrics = pd.DataFrame(
-    metrics_for_slices,
-    columns=["Method", "SSIM", "PSNR"],
-)
-df_metrics
-# %%
-RENDER_GIF = False
-if RENDER_GIF:
-    suffix = "expr"
-    method = "lerp"
-    utils.create_gif(
-        ct_imgs_nvs,
-        np.round(full_spherical_angles, 3),
-        "Scan at angle {}",
-        f"./figs/gifs/{suffix}ct_scan_{method}.gif",
-        fps=8,
+    return pd.DataFrame(
+        metrics,
+        columns=["Method", "SSIM", "PSNR"],
     )
+
+
+df_metrics = get_metrics_phantom(gt_phantom, sliced_methods)
+# %% Save metrics
+# metrics_{phantom_idx}_{experiment type}_{experiment name}
+phantom_title = f"metrics_{experiment_data['phantom index']}_{experiment_data['test type']}_{utils.get_concise_timestamp}"
+phantom_title = phantom_title.replace(" ", "_")
+phantom_title
+
+
+# %%
+def get_metrics_all_phantoms(
+    phantoms: list[np.ndarray],
+    all_methods: list[list[Method]],  # List of methods per phantom
+):
+    all_metrics = []
+    for i, (phantom, methods) in enumerate(zip(phantoms, all_methods)):
+        print(f"Phantom {i + 1}/{len(phantoms)}")
+        for method in methods:
+            print(f"  Evaluating {method.title}")
+            ssim_val = utils.ssim_3d(method.reconstructed_images, phantom)
+            psnr_val = utils.psnr(method.reconstructed_images, phantom)
+            all_metrics.append((i, method.title, ssim_val, psnr_val))
+    return all_metrics
+
+
+all_gt_phantoms = [
+    gt_phantom,
+]
+all_sliced_methods = [
+    sliced_methods,
+]
+metrics_all = get_metrics_all_phantoms(all_gt_phantoms, all_sliced_methods)
+
+df_metrics = pd.DataFrame(metrics_all, columns=["Phantom ID", "Method", "SSIM", "PSNR"])
+
+
+# %%
+df_metrics_all = df_metrics.copy()
+
+# for each method splot on ' ' and use first word
+df_metrics_all["Method"] = df_metrics_all["Method"].apply(lambda x: x.split(" ")[0])
+df_metrics_all["Method"] = df_metrics_all["Method"].replace(["GT", "GT Scan"])
+
+# rename NS to Navier Stokes
+df_metrics_all["Method"] = df_metrics_all["Method"].replace("NS", "Navier Stokes")
+df_metrics_all["Method"] = df_metrics_all["Method"].replace("Full", "Full Scan")
+df_metrics_all["Method"] = df_metrics_all["Method"].replace("Train", "Train Set")
+
+# Drop GT
+df_metrics_all = df_metrics_all[df_metrics_all["Method"] != "GT"]
+
+
+df_pivot = df_metrics_all.pivot_table(
+    index="PhantomID", columns=["Method"], values=["SSIM", "PSNR"]
+)
+
+# Swap levels: make Method the top-level, Metric the sub-level
+df_pivot = df_pivot.swaplevel(axis=1)
+df_pivot = df_pivot.sort_index(axis=1, level=0)
+
+priority_methods = [
+    "Full Scan",
+    "Train Set",
+    "Biharmonic",
+    "TV",
+    "FMM",
+    "Navier Stokes",
+    "NVS",
+]
+current_methods = df_pivot.columns.levels[0].tolist()
+new_method_order = priority_methods + [
+    m for m in current_methods if m not in priority_methods
+]
+df_pivot = df_pivot.reindex(columns=new_method_order, level=0)
+
+
+# Rename metrics with arrows
+df_pivot.columns = df_pivot.columns.set_levels(
+    [
+        f"{lvl}" if lvl in {"PSNR", "SSIM"} else lvl
+        for lvl in df_pivot.columns.levels[1]
+    ],
+    level=1,
+)
+
+# Add average row
+df_pivot.loc["Avg"] = df_pivot.mean()
+n_methods = len(df_pivot.columns.levels[0])
+col_format = "|l|" + "|".join(["cc"] * n_methods) + "|"
+# Export to LaTeX
+latex_table = df_pivot.to_latex(
+    multicolumn=True,
+    multicolumn_format="c",
+    index_names=True,
+    escape=False,
+    caption="Reconstruction quality metrics per phantom.",
+    label="tab:phantom_metrics",
+    float_format="%.3f",
+    column_format=col_format,
+)
+
+
+table_title = "phantom_metrics"
+with open(f"tables/{table_title}.tex", "w") as f:
+    f.write(latex_table)
+
+with open(f"tables/{table_title}.csv", "w") as f:
+    df_pivot.to_csv(f, index=True)
+
+df_pivot

@@ -295,6 +295,12 @@ def create_config(
     return Path(output_path)
 
 
+def seed_rngs(global_rng_seed: int = 42):
+    print(f"Using seed {global_rng_seed}")
+    random.seed(global_rng_seed)
+    np.random.seed(global_rng_seed)
+
+
 # %% [markdown]
 # ## Known Issues
 # TODO
@@ -318,17 +324,18 @@ TrainType = Literal["train new", "train existing", "load existing"]
 ScanType = Literal["parallel", "cone beam"]
 DEBUG = False
 if __name__ == "__main__":
-    # RNG Seed for reproducibility
-    global_rng_seed = random.randint(0, 1000)
-    global_rng_seed = 200
-    print(f"Using seed {global_rng_seed}")
-    random.seed(global_rng_seed)
-    np.random.seed(global_rng_seed)
+    # GPU
+    torch.cuda.empty_cache()
+    torch.set_default_tensor_type("torch.cuda.FloatTensor")
 
     # Hyper params
     video_ckpt = 5_000
     weights_ckpt = 5_000
     n_iters = 10_000
+
+    video_ckpt = 250
+    weights_ckpt = 250
+    n_iters = 500
 
     # Phantom & scan params
     phantom_idx = 16
@@ -339,22 +346,24 @@ if __name__ == "__main__":
     img_res = ph_size
 
     # Model
-    test_type: TestType = "limited scan"
-    train_type: TrainType = "train new"
-    model_name: None | str = "ct_data_13_256_16_600"
+    model_name: None | str = "ct_data_13_256_16_600"  # [MODIFY]
+    test_type: TestType = "limited scan"  # [MODIFY]
+    global_rng_seed = utils.str_title_hash(model_name)
+    seed_rngs(global_rng_seed)
 
-    # GPU
-    torch.cuda.empty_cache()
-    torch.set_default_tensor_type("torch.cuda.FloatTensor")
-
-    test_title = "limited_nerf"
-    test_desc_note = "Limited Nerf using Quateriles 0,1 while interpolating 2,3"
-
-    test_title = "sparse_nerf"
-    test_desc_note = "Sparse Nerf using even images as GT scan images"
-
-    scan_type: ScanType = "parallel"
     save_data = True
+    train_type: TrainType = "train new"  # Fixed for now
+    scan_type: ScanType = "parallel"  # Fixed for now
+
+    if test_type == "limited scan":
+        test_title = test_type.replace(" ", "_")
+        test_desc_note = (
+            "Limited Nerf using scans at limited angles as described in pattern"
+        )
+
+    if test_type == "sparse scan":
+        test_title = test_type.replace(" ", "_")
+        test_desc_note = "Sparse Nerf using even images as GT scan images"
 
 
 # %%
@@ -697,9 +706,12 @@ if globals().get("test_type", None) == "sparse scan":
         )
 
 # %%
+
+
+# %%
 # Save data for evaluation later
 if globals().get("save_data", False):
-    test_title_fn = f"{test_title}_ph:{phantom_idx}_scans:{num_scans}_iters:{n_iters}"
+    test_title_fn = f"{test_title}_ph-{phantom_idx}_scans-{num_scans}_iters-{n_iters}"
 
     experiment_data = {
         "test title": test_title_fn,
@@ -752,6 +764,7 @@ if globals().get("save_data", False):
     data_save_path = Path(
         f"./results/{test_title_fn}@{utils.get_concise_timestamp()}.pkl"
     )
+
     with open(data_save_path, "wb") as f:
         pickle.dump(experiment_data, f)
 

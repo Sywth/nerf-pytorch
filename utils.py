@@ -13,12 +13,20 @@ from matplotlib.animation import FuncAnimation
 from scipy.ndimage import affine_transform
 from skimage.metrics import structural_similarity as ssim
 
+
 # %%
 def ceildiv(a, b):
     return -(-a // b)
 
+
 def get_concise_timestamp() -> str:
-    return datetime.datetime.now().strftime("%Y-%m-%d#%H:%M")
+    return datetime.datetime.now().strftime("%Y-%m-%d#%H-%M")
+
+
+def str_title_hash(string) -> str:
+    return int.from_bytes(string.encode(), "big") % 2**32
+
+
 # %%
 def extract_frames(
     video_path,
@@ -166,7 +174,7 @@ def generate_camera_poses(angles: np.ndarray, radius: float = 4.0, axis="x"):
     poses = [compute_camera_matrix(theta, radius, axis) for theta in angles]
     return poses
 
-    
+
 def rotate_phantom_by_pose(phantom: np.ndarray, cam_pose: np.ndarray):
     """
     Rotate the phantom by the camera pose.
@@ -199,21 +207,25 @@ def mono_to_rgb(image):
     """
     return np.stack([image] * 3, axis=-1)
 
+
 def rgb_to_mono(image):
     """
     Convert image.shape == (H, W, 3) to image.shape == (H, W)
     """
     return np.mean(image, axis=-1)
 
+
 def lerp(v1, v2, t):
     return v1 + t * (v2 - v1)
 
-def psnr(img1 : np.ndarray, img2 : np.ndarray):
+
+def psnr(img1: np.ndarray, img2: np.ndarray):
     mse = np.mean((img1 - img2) ** 2)
     if mse == 0:
         return 100
     PIXEL_MAX = 255.0
     return 20 * np.log10(PIXEL_MAX / np.sqrt(mse))
+
 
 def ssim_3d(gt, recon):
     assert gt.shape == recon.shape, "Input arrays must have the same shape"
@@ -224,6 +236,7 @@ def ssim_3d(gt, recon):
         ssim_value = ssim(gt[:, :, i], recon[:, :, i], data_range=value_range)
         ssim_total += ssim_value
     return ssim_total / D
+
 
 # %% [markdown]
 # Functions for NeRF
