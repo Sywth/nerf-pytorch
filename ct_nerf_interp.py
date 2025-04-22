@@ -372,6 +372,9 @@ def train_and_save_nerf(
             limited_poses,
             limited_indices,
             pattern,
+            # Added late
+            ct_imgs_pred,
+            recon_pred,
         ) = limited_scan(
             train_type=train_type,
             phantom_idx=phantom_idx,
@@ -408,6 +411,9 @@ def train_and_save_nerf(
             render_kwargs_test,
             spherical_angles_train,
             poses_train,
+            # Added late
+            ct_imgs_pred,
+            recon_pred,
         ) = sparse_scan(
             train_type=train_type,
             phantom_idx=phantom_idx,
@@ -445,6 +451,10 @@ def train_and_save_nerf(
         psnrs=psnrs,
         render_kwargs_test=render_kwargs_test,
         global_rng_seed=global_rng_seed,
+        # Added late
+        ct_imgs_pred=ct_imgs_pred,
+        recon_pred=recon_pred,
+        # Optionals
         **opt_kwargs,
     )
 
@@ -564,14 +574,15 @@ def limited_scan(
     # Load the model
     model, render_kwargs_test = get_model(model_path)
 
+    ct_imgs_nerf = nerf_ct_imgs_limited(
+        ct_imgs_partial=ct_imgs_limited,
+        full_poses=poses,
+        hwf=hwf,
+        render_kwargs=render_kwargs_test,
+        partial_indices=limited_indices,
+    )
+    recon_pred = scan_full.reconstruct_3d_volume_sirt(ct_imgs_nerf)
     if process_model:
-        ct_imgs_nerf = nerf_ct_imgs_limited(
-            ct_imgs_partial=ct_imgs_limited,
-            full_poses=poses,
-            hwf=hwf,
-            render_kwargs=render_kwargs_test,
-            partial_indices=limited_indices,
-        )
 
         num_dp = 5
         bp_cg_1, bp_si_1 = ct_scan.plot_reconstructions(
@@ -663,6 +674,9 @@ def limited_scan(
         limited_poses,
         limited_indices,
         pattern,
+        # Added late
+        ct_imgs_nerf,
+        recon_pred,
     )
 
 
@@ -757,15 +771,19 @@ def sparse_scan(
     if train_type == "load existing":
         model_path = f"./logs/auto/{model_name}"
 
+    # Unload pytorch
+    print("> Unloading pytorch")
+    torch.cuda.empty_cache()
+
     # Load the model
     model, render_kwargs_test = get_model(model_path)
+    ct_imgs_nerf = nerf_ct_imgs(ct_imgs_train, poses, hwf, render_kwargs_test)
+    recon_sirt = scan_2n.reconstruct_3d_volume_sirt(ct_imgs_nerf)
 
     if process_model:
-
         # Every 2nd image
         ct_imgs_lanczos = ct_scan.lanczos_ct_imgs(ct_imgs_train)
         ct_imgs_lerp = ct_scan.lerp_ct_imgs(ct_imgs_train)
-        ct_imgs_nerf = nerf_ct_imgs(ct_imgs_train, poses, hwf, render_kwargs_test)
 
         num_dp = 5
         bp_cg_1, bp_si_1 = ct_scan.plot_reconstructions(
@@ -853,6 +871,9 @@ def sparse_scan(
         render_kwargs_test,
         spherical_angles_train,
         poses_train,
+        # Added late
+        ct_imgs_nerf,
+        recon_sirt,
     )
 
 
@@ -876,6 +897,9 @@ def save_data(
     psnrs,
     render_kwargs_test,
     global_rng_seed,
+    # Added late
+    ct_imgs_pred,
+    recon_pred,
     # Limited only
     limited_spherical_angles=None,
     limited_poses=None,
@@ -908,6 +932,9 @@ def save_data(
         "render kwargs": str(render_kwargs_test),
         "created at": utils.get_concise_timestamp(),
         "seed": global_rng_seed,
+        # Added late
+        "pred images": ct_imgs_pred,
+        "pred recon": recon_pred,
     }
 
     if test_type == "limited scan":
@@ -940,18 +967,18 @@ def save_data(
 
 # %%
 if __name__ == "__main__":
-    ph_indexes = [4, 13, 16]
+    ph_indexes = [13, 4, 16]
     for ph_idx in ph_indexes:
         train_and_save_nerf(
             # Real
-            n_iters=10_000,
-            video_ckpt=1_000,
-            weights_ckpt=1_000,
+            # n_iters=10_000,
+            # video_ckpt=1_000,
+            # weights_ckpt=1_000,
             # Test
-            # n_iters=1_000,
-            # video_ckpt=250,
-            # weights_ckpt=250,
+            n_iters=500,
+            video_ckpt=500,
+            weights_ckpt=250,
             phantom_idx=ph_idx,
-            num_scans=64,
+            num_scans=64,  # This the total number of scans in test
             test_type="sparse scan",
         )

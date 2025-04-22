@@ -56,19 +56,29 @@ ExperimentDataKey = Literal[
     "limited indices",
     "train scan angles",
     "train scan poses",
+    "pred images",
+    "pred recon",
     "seed",
     "psnrs",
     "train pattern",
 ]
 
 # %%
-filename = "prev/limited_nerf_ph-16_scans-32_iters-10000@2025-03-12#22-39.pkl"
-filename = "sparse_scan_ph-4_scans-64_iters-1000@2025-04-14#18-17.pkl"
-# filename = "limited_scan_ph-4_scans-64_iters-10000@2025-04-14#17-04.pkl"
-path_to_data = Path(f"./results/{filename}")
+fp_base = Path("./results/limited/64")
+filename = Path("sparse_scan_ph-4_scans-64_iters-10000@2025-04-14#19-21.pkl")
+filename = Path("sparse_scan_ph-13_scans-64_iters-10000@2025-04-14#20-02.pkl")
+filename = Path("limited_scan_ph-4_scans-64_iters-10000@2025-04-14#22-22.pkl")
+path_to_data = fp_base / filename
 
 with open(path_to_data, "rb") as f:
     experiment_data: dict[ExperimentDataKey, Any] = pickle.load(f)
+
+
+path_to_gs_folder = fp_base / "gs"
+ct_imgs_full_gs = np.load(path_to_gs_folder / "ct_imgs_gt.npy")
+gt_phantom_gs = np.load(path_to_gs_folder / "vol_gt.npy")
+ct_imgs_gs = np.load(path_to_gs_folder / "ct_imgs_pred.npy")
+recon_gs = np.load(path_to_gs_folder / "recon_pred.npy")
 
 # %%
 gt_phantom = experiment_data["GT phantom"]
@@ -84,50 +94,21 @@ full_scaner = ct_scan.AstraScanVec3D(
 )
 part_scaner = None
 
-
-def lerp_ct_imgs(
-    ct_imgs_partial,
-    N,
-    partial_indices,
-):
-    # 1. Initialization and Sorting
-    H, W = ct_imgs_partial.shape[1:]
-    ct_imgs_full = np.zeros((N, H, W), dtype=ct_imgs_partial.dtype)
-
-    partial_indices = np.array(partial_indices)
-    sort_order = np.argsort(partial_indices)
-    partial_indices = partial_indices[sort_order]
-    ct_imgs_partial = ct_imgs_partial[sort_order]
-    K = len(partial_indices)
-
-    # 2. Interpolate for each cyclic segment
-    for j in range(K):
-        start_idx = partial_indices[j]
-        start_img = ct_imgs_partial[j]
-
-        # Determine the next anchor (cyclic order)
-        if j < K - 1:
-            end_idx = partial_indices[j + 1]
-            end_img = ct_imgs_partial[j + 1]
-        else:
-            # Wrap-around: adjust index and flip first image horizontally
-            end_idx = partial_indices[0] + N
-            end_img = np.flip(ct_imgs_partial[0], axis=1)
-
-        gap = end_idx - start_idx
-
-        # 3. Interpolate linearly for indices in the segment
-        for i in range(start_idx, end_idx):
-            t = (i - start_idx) / gap
-            interp_img = (1 - t) * start_img + t * end_img
-            ct_imgs_full[i % N] = interp_img
-
-    return ct_imgs_full
-
-
+psnrs = experiment_data["psnrs"]
+plt.plot(psnrs)
 # %%
 if not (test_type == "limited scan" or test_type == "sparse scan"):
     raise ValueError("Invalid test type")
+
+title_df = f"metrics_{experiment_data['phantom index']}_{experiment_data['test type']}"
+title_df = title_df.replace(" ", "_")
+folder = f"results/out/dump_[{experiment_data['test type']}][{experiment_data['phantom index']}]#{utils.get_concise_timestamp()}"
+
+# Create and save desc
+Path(folder).mkdir(parents=True, exist_ok=True)
+with open(f"{folder}/desc.txt", "w") as f:
+    f.write(experiment_data["test description"])
+
 
 # %%
 if test_type == "limited scan":
@@ -148,7 +129,12 @@ if test_type == "limited scan":
         render_kwargs=render_kwargs_test,
         partial_indices=limited_indices,
     )
-    # ct_imgs_lerp = lerp_ct_imgs(ct_train_set_imgs, len(ct_imgs_full), limited_indices)
+
+    # angle biz
+    part_scan_angles = np.array(experiment_data["limited scan angles"])
+    full_scan_angles = np.array(experiment_data["GT scan angles"])
+    unknown_angles = np.setdiff1d(full_scan_angles, part_scan_angles)
+
 
 # %%
 if test_type == "sparse scan":
@@ -169,11 +155,63 @@ if test_type == "sparse scan":
         render_kwargs=render_kwargs_test,
         partial_indices=limited_indices,
     )
-    ct_imgs_lerp = lerp_ct_imgs(ct_train_set_imgs, len(ct_imgs_full), limited_indices)
+
+    # angle biz
+    part_scan_angles = np.array(experiment_data["train scan angles"])
+    full_scan_angles = np.array(experiment_data["GT scan angles"])
+    unknown_angles = np.setdiff1d(full_scan_angles, part_scan_angles)
+
+
+# %% angle biz
+# plot angles
+def spherical_to_cartesian(spherical_coords):
+    theta = spherical_coords[:, 0]  # azimuth
+    phi = spherical_coords[:, 1]  # polar
+    x = np.sin(phi) * np.cos(theta)
+    y = np.sin(phi) * np.sin(theta)
+    z = np.cos(phi)
+    return x, y, z
+
+
+def plot_spherical_angles(part_scan_angles):
+    # Ensure input is np.array of shape (N, 2)
+    part_scan_angles = np.array(part_scan_angles)
+    x, y, z = spherical_to_cartesian(part_scan_angles)
+
+    # Plotting
+    fig = plt.figure()
+    ax = fig.add_subplot(111, projection="3d")
+    ax.quiver(
+        np.zeros_like(x),
+        np.zeros_like(y),
+        np.zeros_like(z),  # origins
+        x,
+        y,
+        z,  # directions
+        length=1.0,
+        normalize=True,
+        color="blue",
+    )
+    ax.set_xlim([-1, 1])
+    ax.set_ylim([-1, 1])
+    ax.set_zlim([-1, 1])
+    ax.set_xlabel("X")
+    ax.set_ylabel("Y")
+    ax.set_zlabel("Z")
+    plt.title("Spherical Scan Directions")
+    plt.show()
+
+
+plot_spherical_angles(part_scan_angles)
 
 # %% Create Train Set
 ct_imgs_train_set = np.zeros_like(ct_imgs_full)
 ct_imgs_train_set[limited_indices] = ct_imgs_full[limited_indices]
+
+# To help with these algorithms we will shift the data in axis=1 by 4
+# TODO get this to work, i think i also need to update limtied indices and mask
+# ct_imgs_train_set = np.roll(ct_imgs_train_set, shift=-4, axis=0)
+# limited_indices = list((np.array(limited_indices) - 4) % 64)
 
 
 # %% [markdown]
@@ -345,13 +383,18 @@ def inpaint_tv_pytorch(
     sino_tv, losses = inpaint_tv_pytorch_core(
         sinogram,
         mask,
-        num_iters=5_000,
+        num_iters=750,
     )
 
     for i in range(sinogram.shape[0]):
         sino_tv[i][mask == 0] = sinogram[i][mask == 0]
 
     plt.plot(losses)
+    plt.yscale("log")
+    plt.title("TV Inpainting Loss")
+    plt.xlabel("Iteration")
+    plt.ylabel("Loss (log scale)")
+    plt.savefig(f"{folder}/inpaint_tv_pytorch#{np.random.randint(9999)}.png", dpi=300)
     plt.show()
 
     return sino_tv
@@ -387,7 +430,6 @@ recon_sirt_tv = full_scaner.reconstruct_3d_volume_sirt(
     ct_imgs_tv, num_iterations=sirt_iter
 )
 
-
 # %% Setup
 # normalize all gt, nvs and part reconstructions
 
@@ -400,6 +442,7 @@ titles_phantom_plot = [
     "NS Reconstruction",
     "FMM Reconstruction",
     "TV Reconstruction",
+    "GS Reconstruction",
 ]
 all_phantoms = [
     gt_phantom,
@@ -410,6 +453,7 @@ all_phantoms = [
     recon_sirt_ns,
     recon_sirt_fmm,
     recon_sirt_tv,
+    recon_gs,
 ]
 all_phantoms = [
     (phantom - phantom.min()) / (phantom.max() - phantom.min())
@@ -420,22 +464,22 @@ all_phantoms = [
 titles_sino_plot = [
     "Full Sinogram",
     "Training Set Sinogram",
-    # "Lerp Sinogram",
     "NVS Sinogram",
     "Biharmonic Sinogram",
     "NS Sinogram",
     "FMM Sinogram",
     "TV Sinogram",
+    "GS Sinogram",
 ]
 all_ct_imgs = [
     ct_imgs_full,
     ct_imgs_train_set,
-    # ct_imgs_lerp,
     ct_imgs_nvs,
     ct_imgs_biharmonic,
     ct_imgs_ns,
     ct_imgs_fmm,
     ct_imgs_tv,
+    ct_imgs_gs,
 ]
 
 print("Global min:", min(phantom.min() for phantom in all_phantoms))
@@ -449,7 +493,12 @@ class Method:
     reconstructed_images: np.ndarray
 
 
-def plot_methods(target_idx: int, methods: list[Method], is_sinogram: bool = False):
+def plot_methods(
+    target_idx: int,
+    methods: list[Method],
+    is_sinogram: bool = False,
+    save_title: str = "xxx",
+):
     n_cols = 4
     len_methods = len(methods) + (1 if is_sinogram else 0)
     n_rows = math.ceil(len_methods / n_cols)
@@ -488,6 +537,7 @@ def plot_methods(target_idx: int, methods: list[Method], is_sinogram: bool = Fal
     cbar.set_label("Intensity (a.u.)", labelpad=20, fontsize=20)
     cbar.ax.tick_params(labelsize=14)
 
+    fig.savefig(f"{folder}/{save_title}.png", dpi=300)
     plt.show()
 
 
@@ -499,6 +549,7 @@ def compare_methods(
     metric: MetricMethods,
     methods: list[Method],
     is_sinogram: bool = False,
+    save_title: str = "xxx",
 ):
     gt_method = methods[0]
 
@@ -549,13 +600,17 @@ def compare_methods(
     cbar.set_label(f"{metric} (a.u.)", labelpad=20, fontsize=20)
     cbar.ax.tick_params(labelsize=14)
 
+    fig.savefig(f"{folder}/{save_title}.png", dpi=300)
     plt.show()
 
 
 def evaluate_methods(target_idx: int, methods: list[Method], is_sinogram: bool = False):
     plot_methods(target_idx, methods, is_sinogram)
-    compare_methods(target_idx, "Absoulte Difference", methods, is_sinogram)
-    compare_methods(target_idx, "SSIM", methods, is_sinogram)
+    prefix = "sino" if is_sinogram else "phantom"
+    compare_methods(
+        target_idx, "Absoulte Difference", methods, is_sinogram, f"{prefix}-abs"
+    )
+    compare_methods(target_idx, "SSIM", methods, is_sinogram, f"{prefix}-ssim")
 
 
 sliced_methods = [
@@ -597,9 +652,7 @@ def get_metrics_phantom(gt_phantom: np.ndarray, methods: list[Method]) -> pd.Dat
 
 df_metrics = get_metrics_phantom(gt_phantom, sliced_methods)
 # %% Save metrics
-# metrics_{phantom_idx}_{experiment type}_{experiment name}
-title_df = f"metrics_{experiment_data['phantom index']}_{experiment_data['test type']}_{utils.get_concise_timestamp()}"
-title_df = title_df.replace(" ", "_")
+path_df = Path(folder) / Path(f"{title_df}.csv")
 
-df_metrics.to_csv(f"tables/{title_df}.csv", index=False)
+df_metrics.to_csv(path_df, index=False)
 df_metrics
