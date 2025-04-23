@@ -969,5 +969,5 @@ if __name__ == "__main__":
             # Test
             phantom_idx=ph_idx,
             num_scans=256,  # This the total number of scans in test
-            test_type="limited scan",
+            test_type="sparse scan",
         )
