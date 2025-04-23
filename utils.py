@@ -427,3 +427,36 @@ rot_theta = lambda th: torch.Tensor(
         [0, 0, 0, 1],
     ]
 ).float()
+
+
+# %% Plot angles round 2
+def spherical_to_cartesian(spherical_coords: np.ndarray) -> np.ndarray:
+    theta, phi = spherical_coords
+    x = np.sin(theta) * np.cos(phi)
+    y = np.sin(theta) * np.sin(phi)
+    z = np.cos(theta)
+    return np.array([x, y, z])
+
+
+def plot_angles(angles: np.ndarray, limited_indices: list[int] = None, title: str = ""):
+    cartesian_coords = np.array([spherical_to_cartesian(angle) for angle in angles])
+
+    colors = ["green" if i in limited_indices else "red" for i in range(len(angles))]
+
+    fig = plt.figure()
+    ax = fig.add_subplot(111, projection="3d")
+
+    ax.scatter(0, 0, 0, color="black", alpha=0.6, marker="x", s=75)
+    for coord, color in zip(cartesian_coords, colors):
+        ax.scatter(coord[0], coord[2], coord[1], color=color, alpha=0.6)
+
+    ax.set_xlabel("X")
+    ax.set_ylabel("Z")
+    ax.set_zlabel("Y")
+    ax.set_title(title)
+
+    ax.set_xlim([-1, 1])
+    ax.set_ylim([-1, 1])
+    ax.set_zlim([-1, 1])
+
+    plt.show()

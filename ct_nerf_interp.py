@@ -537,6 +537,14 @@ def limited_scan(
     use_view_dirs = True
     use_mono_ct = False
 
+    # Plot Angles [DEBUG]
+    utils.plot_angles(
+        spherical_angles,
+        limited_indices,
+        title="Full Scan Angles",
+    )
+    # DEBUG
+
     psnrs = None
     if train_type == "train new":
         path_ds = create_nerf_ds(
@@ -952,7 +960,6 @@ def save_data(
 # %%
 if __name__ == "__main__":
     ph_indexes = [13, 4, 16]
-    ph_indexes = [16]  # TODO - REDO This one as it failed last time
     for ph_idx in ph_indexes:
         train_and_save_nerf(
             # Real
@@ -961,6 +968,6 @@ if __name__ == "__main__":
             weights_ckpt=2_500,
             # Test
             phantom_idx=ph_idx,
-            num_scans=64,  # This the total number of scans in test
+            num_scans=256,  # This the total number of scans in test
             test_type="limited scan",
         )
