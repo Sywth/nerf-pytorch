@@ -1,3 +1,6 @@
+# %% [markdown]
+# ## Setup
+
 # %%
 import math
 import pickle
@@ -128,7 +131,7 @@ with open(f"{folder}/desc.txt", "w") as f:
     f.write(experiment_data["test description"])
 
 
-# %%
+# %% Method Specific Constants
 if test_type == "limited scan":
     part_spherical_angles = experiment_data["limited scan angles"]
     part_scaner = ct_scan.AstraScanVec3D(
@@ -143,8 +146,6 @@ if test_type == "limited scan":
     full_scan_angles = np.array(experiment_data["GT scan angles"])
     unknown_angles = np.setdiff1d(full_scan_angles, part_scan_angles)
 
-
-# %%
 if test_type == "sparse scan":
     part_spherical_angles = experiment_data["train scan angles"]
     part_scaner = ct_scan.AstraScanVec3D(
@@ -159,61 +160,24 @@ if test_type == "sparse scan":
     full_scan_angles = np.array(experiment_data["GT scan angles"])
     unknown_angles = np.setdiff1d(full_scan_angles, part_scan_angles)
 
-
-# %% angle biz
-# plot angles
-def spherical_to_cartesian(spherical_coords):
-    theta = spherical_coords[:, 0]  # azimuth
-    phi = spherical_coords[:, 1]  # polar
-    x = np.sin(phi) * np.cos(theta)
-    y = np.sin(phi) * np.sin(theta)
-    z = np.cos(phi)
-    return x, y, z
-
-
-def plot_spherical_angles(part_scan_angles):
-    # Ensure input is np.array of shape (N, 2)
-    part_scan_angles = np.array(part_scan_angles)
-    x, y, z = spherical_to_cartesian(part_scan_angles)
-
-    # Plotting
-    fig = plt.figure()
-    ax = fig.add_subplot(111, projection="3d")
-    ax.quiver(
-        np.zeros_like(x),
-        np.zeros_like(y),
-        np.zeros_like(z),  # origins
-        x,
-        y,
-        z,  # directions
-        length=1.0,
-        normalize=True,
-        color="blue",
-    )
-    ax.set_xlim([-1, 1])
-    ax.set_ylim([-1, 1])
-    ax.set_zlim([-1, 1])
-    ax.set_xlabel("X")
-    ax.set_ylabel("Y")
-    ax.set_zlabel("Z")
-    plt.title("Spherical Scan Directions")
-    plt.show()
-
-
-plot_spherical_angles(part_scan_angles)
-
-# %% Create Train Set
 ct_imgs_train_set = np.zeros_like(ct_imgs_full_nf)
 ct_imgs_train_set[limited_indices] = ct_imgs_full_nf[limited_indices]
 
-# To help with these algorithms we will shift the data in axis=1 by 4
-# TODO get this to work, i think i also need to update limtied indices and mask
-# ct_imgs_train_set = np.roll(ct_imgs_train_set, shift=-4, axis=0)
-# limited_indices = list((np.array(limited_indices) - 4) % 64)
+
+# %% angle biz
+# plot angles
+utils.plot_angles(
+    full_spherical_angles,
+    limited_indices,
+    title="Full Scan Angles",
+)
+
+# TODO : Make algorthims work better by updating mask and ct_imgs_train_set with a
+#   np.roll of offset=12 in axis=0
 
 
 # %% [markdown]
-# # Inpainting Methods
+# ## Inpainting Methods
 # %% Get Mask
 def get_mask(n, h, w, limited_indices):
     """
@@ -569,13 +533,24 @@ all_ct_imgs = [
 print("Global min:", min(phantom.min() for phantom in all_phantoms))
 print("Global max:", max(phantom.max() for phantom in all_phantoms))
 
+
+# %% Make Sinograms
+
+gt_sino_nf = ct_imgs_full_nf.swapaxes(0, 1)
+gt_sino_gs = ct_imgs_full_gs.swapaxes(0, 1)
+assert gt_sino_nf.shape == gt_sino_gs.shape, "GT sinograms should be the same shape"
+sino_idx = len(gt_sino_nf) // 2
+
+# %% [markdown]
+# ## Plotting
+
 # %% Plot Phantoms
 
 fig, axes = plt.subplots(2, 5, figsize=(25, 10))
 axes = axes.flatten()
 phantom_idx = len(gt_phantom_nf) // 2
 for ax, title, phantom in zip(axes, titles_phantom_plot, all_phantoms):
-    ax.imshow(
+    im = ax.imshow(
         phantom[phantom_idx],
         cmap="gray",
         vmin=0,
@@ -585,20 +560,19 @@ for ax, title, phantom in zip(axes, titles_phantom_plot, all_phantoms):
     ax.set_title(title, fontsize=20)
     ax.axis("off")
 
+# Add a colorbar
+cbar = fig.colorbar(im, ax=axes, orientation="vertical", fraction=0.046, pad=0.04)
+cbar.set_label("Intensity (a.u.)", fontsize=16)
+cbar.ax.tick_params(labelsize=12)
 
-# %% Make Sinograms
-
-gt_sino_nf = ct_imgs_full_nf.swapaxes(0, 1)
-gt_sino_gs = ct_imgs_full_gs.swapaxes(0, 1)
-assert gt_sino_nf.shape == gt_sino_gs.shape, "GT sinograms should be the same shape"
-sino_idx = len(gt_sino_nf) // 2
+plt.show()
 
 # %% Plot Sinograms
 fig, axes = plt.subplots(2, 5, figsize=(25, 10))
 axes = axes.flatten()
 for ax, title, imgs in zip(axes[1:], titles_sino_plot, all_ct_imgs):
     pred_img = imgs.swapaxes(0, 1)[sino_idx]
-    ax.imshow(
+    im = ax.imshow(
         pred_img,
         cmap="gray",
         vmin=0,
@@ -610,9 +584,15 @@ for ax, title, imgs in zip(axes[1:], titles_sino_plot, all_ct_imgs):
 
 for ax in axes:
     ax.axis("off")
+
+# Add a colorbar
+cbar = fig.colorbar(im, ax=axes, orientation="vertical", fraction=0.046, pad=0.04)
+cbar.set_label("Intensity (a.u.)", fontsize=16)
+cbar.ax.tick_params(labelsize=12)
+
 plt.show()
 
-# %% Plot Sinogram Diffs
+# %% Plot Sinogram Abs Diffs
 fig, axes = plt.subplots(2, 5, figsize=(25, 10))
 axes = axes.flatten()
 for i, (ax, title, imgs) in enumerate(
@@ -621,7 +601,7 @@ for i, (ax, title, imgs) in enumerate(
     pred_img = imgs.swapaxes(0, 1)[sino_idx]
     gt_img = gt_sino_nf[sino_idx]
     sino_diff = np.abs(pred_img - gt_img)
-    ax.imshow(
+    im = ax.imshow(
         sino_diff,
         vmin=0,
         vmax=1,
@@ -632,24 +612,69 @@ for i, (ax, title, imgs) in enumerate(
 
 for ax in axes:
     ax.axis("off")
+
+# Add a colorbar
+cbar = fig.colorbar(im, ax=axes, orientation="vertical", fraction=0.046, pad=0.04)
+cbar.set_label("Absolute Deviation (a.u.)", fontsize=16)
+cbar.ax.tick_params(labelsize=12)
+
 plt.show()
-# %% # TODO add SSIM
+
+# %%
+# %% Plot Sinogram SSIM Gradients
+fig, axes = plt.subplots(2, 5, figsize=(25, 10))
+axes = axes.flatten()
+
+ssim_gradient_imgs = np.array(
+    [
+        ssim(
+            gt_sino_nf[sino_idx],
+            imgs.swapaxes(0, 1)[sino_idx],
+            gradient=True,
+            data_range=1.0,
+        )[1]
+        for imgs in all_ct_imgs[1:]
+    ]
+)
+
+min_ssim = np.min(ssim_gradient_imgs)
+max_ssim = np.max(ssim_gradient_imgs)
+
+for i, (ax, title, img) in enumerate(
+    zip(axes[2:], titles_sino_plot[1:], ssim_gradient_imgs)
+):
+    im = ax.imshow(
+        img,
+        aspect="auto",
+        cmap="magma",
+        vmin=min_ssim,
+        vmax=max_ssim,
+    )
+    ax.set_title(title, fontsize=20)
+
+for ax in axes:
+    ax.axis("off")
+
+# Add a colorbar
+cbar = fig.colorbar(im, ax=axes, orientation="vertical", fraction=0.046, pad=0.04)
+cbar.set_label("Pointwise SSIM Gradient (a.u.)", fontsize=16, labelpad=22)
+cbar.ax.tick_params(labelsize=12)
+plt.show()
 
 
 # %% Get metrics
 def get_metrics_phantom(
-    gt_phantom: np.ndarray, titles: list[str], recons: list[np.ndarray]
+    titles: list[str], recons: list[np.ndarray], gs_idx: int
 ) -> pd.DataFrame:
     metrics = []
-    for title, recon in tqdm.tqdm(zip(titles, recons), total=len(titles)):
-        ssim_val = utils.ssim_3d(recon, gt_phantom)
-        psnr_val = utils.psnr(recon, gt_phantom)
+    for i, (title, recon) in tqdm.tqdm(
+        enumerate(zip(titles, recons)), total=len(titles)
+    ):
+        gt = gt_phantom_gs if i == gs_idx else gt_phantom_nf
+        print(i, gt.std())
 
-        # botch
-        if title == "GS Reconstruction":
-            print("[Botch] Use different phantom for GS")
-            ssim_val = utils.ssim_3d(recon_gs, gt_phantom_gs)
-            psnr_val = utils.psnr(recon_gs, gt_phantom_gs)
+        ssim_val = utils.ssim_3d(recon, gt)
+        psnr_val = utils.psnr(recon, gt)
 
         metrics.append((title, ssim_val, psnr_val))
     return pd.DataFrame(
@@ -658,7 +683,11 @@ def get_metrics_phantom(
     )
 
 
-df_metrics = get_metrics_phantom(gt_phantom_nf, titles_phantom_plot, all_phantoms)
+df_metrics = get_metrics_phantom(
+    titles_phantom_plot,
+    all_phantoms,
+    9,
+)
 df_metrics
 # %% Save metrics
 path_df = Path(folder) / Path(f"{title_df}.csv")
