@@ -585,7 +585,7 @@ def limited_scan(
     if process_model:
 
         num_dp = 5
-        bp_cg_1, bp_si_1 = ct_scan.plot_reconstructions(
+        bp_si_1 = ct_scan.plot_reconstructions(
             scan_full,
             ct_imgs,
             phantom,
@@ -593,7 +593,7 @@ def limited_scan(
             title=f"[Full Orignial] Reconstructed Slice ({num_scans} views)",
             num_dp=num_dp,
         )
-        bp_cg_2, bp_si_2 = ct_scan.plot_reconstructions(
+        bp_si_2 = ct_scan.plot_reconstructions(
             scan_partial,
             ct_imgs_limited,
             phantom,
@@ -601,7 +601,7 @@ def limited_scan(
             title=f"[Part Orignial] Reconstructed Slice ({len(limited_spherical_angles)} views)",
             num_dp=num_dp,
         )
-        bg_cg_5, bp_si_5 = ct_scan.plot_reconstructions(
+        bp_si_5 = ct_scan.plot_reconstructions(
             scan_full,
             ct_imgs_nerf,
             phantom,
@@ -620,14 +620,6 @@ def limited_scan(
                 title=f"[Full Nerf] Reconstructed Slice ({num_scans} views)",
                 num_dp=num_dp,
             )
-
-        # Compute to save experiment data for later
-        bp_si_gt = bp_si_1
-        bp_cg_gt = bp_cg_1
-        bp_si_tr = bp_si_2
-        bp_cg_tr = bp_cg_2
-        bp_si_nvs = bp_si_5
-        bp_cg_nvs = bg_cg_5
 
         # Create GIFs of one interpolation method at a tiem
         RENDER_GIF = False
@@ -786,7 +778,7 @@ def sparse_scan(
         ct_imgs_lerp = ct_scan.lerp_ct_imgs(ct_imgs_train)
 
         num_dp = 5
-        bp_cg_1, bp_si_1 = ct_scan.plot_reconstructions(
+        bp_si_1 = ct_scan.plot_reconstructions(
             scan_2n,
             ct_imgs,
             phantom,
@@ -794,7 +786,7 @@ def sparse_scan(
             title=f"[Full Orignial] Reconstructed Slice ({num_scans} views)",
             num_dp=num_dp,
         )
-        bp_cg_2, bp_si_2 = ct_scan.plot_reconstructions(
+        bp_si_2 = ct_scan.plot_reconstructions(
             scan_n,
             ct_imgs_train,
             phantom,
@@ -803,7 +795,7 @@ def sparse_scan(
             num_dp=num_dp,
         )
 
-        bp_cg_3, bp_si_3 = ct_scan.plot_reconstructions(
+        bp_si_3 = ct_scan.plot_reconstructions(
             scan_2n,
             ct_imgs_lerp,
             phantom,
@@ -811,7 +803,7 @@ def sparse_scan(
             title=f"[Half Orignial, Half Lerp] Reconstructed Slice ({num_scans} views)",
             num_dp=num_dp,
         )
-        bp_cg_4, bp_si_4 = ct_scan.plot_reconstructions(
+        bp_si_4 = ct_scan.plot_reconstructions(
             scan_2n,
             ct_imgs_lanczos,
             phantom,
@@ -819,7 +811,7 @@ def sparse_scan(
             title=f"[Half Orignial, Half lanczos] Reconstructed Slice ({num_scans} views)",
             num_dp=num_dp,
         )
-        bg_cg_5, bp_si_5 = ct_scan.plot_reconstructions(
+        bp_si_5 = ct_scan.plot_reconstructions(
             scan_2n,
             ct_imgs_nerf,
             phantom,
@@ -827,14 +819,6 @@ def sparse_scan(
             title=f"[Half Orignial, Half Nerf] Reconstructed Slice ({num_scans} views)",
             num_dp=num_dp,
         )
-
-        # Compute to save experiment data for later
-        bp_si_gt = bp_si_1
-        bp_cg_gt = bp_cg_1
-        bp_si_tr = bp_si_2
-        bp_cg_tr = bp_cg_2
-        bp_si_nvs = bp_si_5
-        bp_cg_nvs = bg_cg_5
 
         # Create GIFs of one interpolation method at a tiem
         RENDER_GIF = False
@@ -968,17 +952,15 @@ def save_data(
 # %%
 if __name__ == "__main__":
     ph_indexes = [13, 4, 16]
+    ph_indexes = [16]  # TODO - REDO This one as it failed last time
     for ph_idx in ph_indexes:
         train_and_save_nerf(
             # Real
-            # n_iters=10_000,
-            # video_ckpt=1_000,
-            # weights_ckpt=1_000,
+            n_iters=10_000,
+            video_ckpt=2_500,
+            weights_ckpt=2_500,
             # Test
-            n_iters=500,
-            video_ckpt=500,
-            weights_ckpt=250,
             phantom_idx=ph_idx,
             num_scans=64,  # This the total number of scans in test
-            test_type="sparse scan",
+            test_type="limited scan",
         )
