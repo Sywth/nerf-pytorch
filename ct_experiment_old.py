@@ -56,59 +56,41 @@ ExperimentDataKey = Literal[
     "limited indices",
     "train scan angles",
     "train scan poses",
-    # Added late
     "pred images",
     "pred recon",
-    # end
     "seed",
     "psnrs",
     "train pattern",
 ]
 
 # %%
-# Load Gaussian Data
 fp_base = Path("./results/limited/64")
-ph_idx = 13
-nf_pkl_matches = list(fp_base.glob(f"limited_scan_ph-{ph_idx}_*.pkl"))
-assert len(nf_pkl_matches) == 1, "There should exactly one pkl file"
-path_to_data = nf_pkl_matches[0]
+filename = Path("sparse_scan_ph-4_scans-64_iters-10000@2025-04-14#19-21.pkl")
+filename = Path("sparse_scan_ph-13_scans-64_iters-10000@2025-04-14#20-02.pkl")
+filename = Path("limited_scan_ph-4_scans-64_iters-10000@2025-04-14#22-22.pkl")
+path_to_data = fp_base / filename
 
 with open(path_to_data, "rb") as f:
     experiment_data: dict[ExperimentDataKey, Any] = pickle.load(f)
 
 
-# Normalize NeRF and GS data
-def normalize_data(data: np.ndarray) -> np.ndarray:
-    return (data - data.min()) / (data.max() - data.min())
+path_to_gs_folder = fp_base / "gs"
+ct_imgs_full_gs = np.load(path_to_gs_folder / "ct_imgs_gt.npy")
+gt_phantom_gs = np.load(path_to_gs_folder / "vol_gt.npy")
+ct_imgs_gs = np.load(path_to_gs_folder / "ct_imgs_pred.npy")
+recon_gs = np.load(path_to_gs_folder / "recon_pred.npy")
 
-
-# fmt : off
-# Load Gaussian Data
-path_to_gs_folder = fp_base / Path(f"gs/{ph_idx}/")
-ct_imgs_full_gs = normalize_data(np.load(path_to_gs_folder / "ct_imgs_gt.npy"))
-gt_phantom_gs = normalize_data(np.load(path_to_gs_folder / "vol_gt.npy")).transpose(
-    2, 0, 1
-)
-ct_imgs_gs = normalize_data(np.load(path_to_gs_folder / "ct_imgs_pred.npy"))
-recon_gs = normalize_data(np.load(path_to_gs_folder / "recon_pred.npy"))
-
-# Load NeRF Data
-ct_imgs_full_nf = normalize_data(experiment_data["GT scan images"])
-gt_phantom_nf = normalize_data(experiment_data["GT phantom"])
-ct_imgs_nf = normalize_data(experiment_data["pred images"])
-recon_nf = normalize_data(experiment_data["pred recon"])
-# fmt : on
-
-# Misc Data from NeRF
+# %%
+gt_phantom = experiment_data["GT phantom"]
 phantom_idx = experiment_data["phantom index"]
-img_res = ct_imgs_full_nf.shape[1]
+ct_imgs_full = experiment_data["GT scan images"]
+img_res = ct_imgs_full.shape[1]
 test_type = experiment_data["test type"]
 poses = torch.from_numpy(experiment_data["GT scan poses"]).to(device)
 full_spherical_angles = experiment_data["GT scan angles"]
-hwf = (img_res, img_res, experiment_data["fov"])
 
-full_scanner = ct_scan.AstraScanVec3D(
-    gt_phantom_nf.shape, full_spherical_angles, img_res=img_res
+full_scaner = ct_scan.AstraScanVec3D(
+    gt_phantom.shape, full_spherical_angles, img_res=img_res
 )
 part_scaner = None
 
@@ -132,11 +114,21 @@ with open(f"{folder}/desc.txt", "w") as f:
 if test_type == "limited scan":
     part_spherical_angles = experiment_data["limited scan angles"]
     part_scaner = ct_scan.AstraScanVec3D(
-        gt_phantom_nf.shape, part_spherical_angles, img_res=img_res
+        gt_phantom.shape, part_spherical_angles, img_res=img_res
     )
 
+    model, render_kwargs_test = ct_nerf_interp.get_model(experiment_data["model path"])
     limited_indices = experiment_data["limited indices"]
-    ct_train_set_imgs = ct_imgs_full_nf[limited_indices]
+    ct_train_set_imgs = ct_imgs_full[limited_indices]
+    hwf = (img_res, img_res, experiment_data["fov"])
+
+    ct_imgs_nvs = ct_nerf_interp.nerf_ct_imgs_limited(
+        ct_imgs_partial=ct_train_set_imgs,
+        full_poses=poses,
+        hwf=hwf,
+        render_kwargs=render_kwargs_test,
+        partial_indices=limited_indices,
+    )
 
     # angle biz
     part_scan_angles = np.array(experiment_data["limited scan angles"])
@@ -148,11 +140,21 @@ if test_type == "limited scan":
 if test_type == "sparse scan":
     part_spherical_angles = experiment_data["train scan angles"]
     part_scaner = ct_scan.AstraScanVec3D(
-        gt_phantom_nf.shape, part_spherical_angles, img_res=img_res
+        gt_phantom.shape, part_spherical_angles, img_res=img_res
     )
 
-    limited_indices = list(range(0, len(ct_imgs_full_nf), 2))
-    ct_train_set_imgs = ct_imgs_full_nf[limited_indices]
+    model, render_kwargs_test = ct_nerf_interp.get_model(experiment_data["model path"])
+    limited_indices = list(range(0, len(ct_imgs_full), 2))
+    ct_train_set_imgs = ct_imgs_full[limited_indices]
+    hwf = (img_res, img_res, experiment_data["fov"])
+
+    ct_imgs_nvs = ct_nerf_interp.nerf_ct_imgs_limited(
+        ct_imgs_partial=ct_train_set_imgs,
+        full_poses=poses,
+        hwf=hwf,
+        render_kwargs=render_kwargs_test,
+        partial_indices=limited_indices,
+    )
 
     # angle biz
     part_scan_angles = np.array(experiment_data["train scan angles"])
@@ -203,8 +205,8 @@ def plot_spherical_angles(part_scan_angles):
 plot_spherical_angles(part_scan_angles)
 
 # %% Create Train Set
-ct_imgs_train_set = np.zeros_like(ct_imgs_full_nf)
-ct_imgs_train_set[limited_indices] = ct_imgs_full_nf[limited_indices]
+ct_imgs_train_set = np.zeros_like(ct_imgs_full)
+ct_imgs_train_set[limited_indices] = ct_imgs_full[limited_indices]
 
 # To help with these algorithms we will shift the data in axis=1 by 4
 # TODO get this to work, i think i also need to update limtied indices and mask
@@ -226,9 +228,9 @@ def get_mask(n, h, w, limited_indices):
 
 
 mask = get_mask(
-    ct_imgs_full_nf.shape[0],
-    ct_imgs_full_nf.shape[1],
-    ct_imgs_full_nf.shape[2],
+    ct_imgs_full.shape[0],
+    ct_imgs_full.shape[1],
+    ct_imgs_full.shape[2],
     limited_indices,
 )
 
@@ -251,6 +253,7 @@ ct_imgs_biharmonic = inpaint_sinogram(
     ct_imgs_train_set.swapaxes(0, 1),
     mask,
 ).swapaxes(0, 1)
+
 
 # %% Tela FMM & Navier Stokes
 InpaintMethodFlagType = Literal[
@@ -380,6 +383,7 @@ def inpaint_tv_pytorch(
     sino_tv, losses = inpaint_tv_pytorch_core(
         sinogram,
         mask,
+        num_iters=750,
     )
 
     for i in range(sinogram.shape[0]):
@@ -396,119 +400,35 @@ def inpaint_tv_pytorch(
     return sino_tv
 
 
-offset = 12
-ct_imgs_train_set_rolled = np.roll(
-    ct_imgs_train_set,
-    shift=-offset,
-    axis=0,
-)
-mask_rolled = np.roll(
-    mask,
-    shift=-offset,
-    axis=0,
-)
-
 ct_imgs_tv = inpaint_tv_pytorch(
-    ct_imgs_train_set_rolled.swapaxes(0, 1),
-    mask_rolled,
+    ct_imgs_train_set.swapaxes(0, 1),
+    mask,
 ).swapaxes(0, 1)
-ct_imgs_tv = np.roll(
-    ct_imgs_tv,
-    shift=offset,
-    axis=0,
-)
-
-plt.imshow(
-    np.abs(ct_imgs_train_set - ct_imgs_tv).swapaxes(0, 1)[128],
-)
-plt.colorbar()
-plt.show()
-
-# %% Lerp
-
-
-def lerp_ct_imgs(
-    ct_imgs: np.ndarray,
-    indices_mask: list[int] = None,
-    num_total_imgs: int = 64,
-) -> np.ndarray:
-    # 2. Precompute interpolated images
-    interpolated_imgs = ct_imgs.copy()
-    for i in range(num_total_imgs):
-        if indices_mask[i] == 1:
-            continue
-
-        # NOTE : This should need to be flipped if
-        #   we go over the end of the array on either side
-        #   but adding that logic appears to be wrong
-
-        # 3. Find nearest valid frames (cyclically)
-        prev_idx = (i - 1) % num_total_imgs
-        while indices_mask[prev_idx] == 0:
-            prev_idx = (prev_idx - 1) % num_total_imgs
-
-        next_idx = (i + 1) % num_total_imgs
-        while indices_mask[next_idx] == 0:
-            next_idx = (next_idx + 1) % num_total_imgs
-
-        # 4. Compute interpolation weights
-        total_dist = (next_idx - prev_idx) % num_total_imgs
-        dist_to_prev = (i - prev_idx) % num_total_imgs
-        assert total_dist > 0, "Invalid distance between frames"
-        alpha = dist_to_prev / total_dist
-
-        # 5. Linear interpolation
-        prev_img = ct_imgs[prev_idx]
-        next_img = ct_imgs[next_idx]
-
-        interpolated_imgs[i] = utils.lerp(prev_img, next_img, alpha)
-
-    return interpolated_imgs
-
-
-indices_mask = np.zeros(len(ct_imgs_full_nf))
-indices_mask[limited_indices] = 1
-
-ct_imgs_lerp = lerp_ct_imgs(
-    ct_imgs_train_set,
-    indices_mask,
-    ct_imgs_full_nf.shape[0],
-)
-
-plt.imshow(
-    np.roll(ct_imgs_lerp.swapaxes(0, 1)[ct_imgs_lerp.shape[1] // 2], 12, axis=0),
-    aspect=3,
-)
-plt.show()
 
 # %%
 sirt_iter = 256
 
-recon_sirt_full = full_scanner.reconstruct_3d_volume_sirt(
-    ct_imgs_full_nf, num_iterations=sirt_iter
+recon_sirt_full = full_scaner.reconstruct_3d_volume_sirt(
+    ct_imgs_full, num_iterations=sirt_iter
+)
+recon_sirt_nvs = full_scaner.reconstruct_3d_volume_sirt(
+    ct_imgs_nvs, num_iterations=sirt_iter
 )
 recon_sirt_train_set = part_scaner.reconstruct_3d_volume_sirt(
     ct_train_set_imgs, num_iterations=sirt_iter
 )
-recon_sirt_biharmonic = full_scanner.reconstruct_3d_volume_sirt(
+recon_sirt_biharmonic = full_scaner.reconstruct_3d_volume_sirt(
     ct_imgs_biharmonic, num_iterations=sirt_iter
 )
-recon_sirt_ns = full_scanner.reconstruct_3d_volume_sirt(
+recon_sirt_ns = full_scaner.reconstruct_3d_volume_sirt(
     ct_imgs_ns, num_iterations=sirt_iter
 )
-recon_sirt_fmm = full_scanner.reconstruct_3d_volume_sirt(
+recon_sirt_fmm = full_scaner.reconstruct_3d_volume_sirt(
     ct_imgs_fmm, num_iterations=sirt_iter
 )
-recon_sirt_tv = full_scanner.reconstruct_3d_volume_sirt(
+recon_sirt_tv = full_scaner.reconstruct_3d_volume_sirt(
     ct_imgs_tv, num_iterations=sirt_iter
 )
-recon_sirt_gs = full_scanner.reconstruct_3d_volume_sirt(
-    ct_imgs_gs, num_iterations=sirt_iter
-)
-recon_sirt_lerp = full_scanner.reconstruct_3d_volume_sirt(
-    ct_imgs_lerp, num_iterations=sirt_iter
-)
-
 
 # %% Setup
 # normalize all gt, nvs and part reconstructions
@@ -517,8 +437,7 @@ titles_phantom_plot = [
     "GT Slice",
     "Full Scan Reconstruction",
     "Train Set Reconstruction",
-    "LERP Reconstruction",
-    "NeRF Reconstruction",
+    "NVS Reconstruction",
     "Biharmonic Reconstruction",
     "NS Reconstruction",
     "FMM Reconstruction",
@@ -526,16 +445,15 @@ titles_phantom_plot = [
     "GS Reconstruction",
 ]
 all_phantoms = [
-    gt_phantom_nf,
+    gt_phantom,
     recon_sirt_full,
     recon_sirt_train_set,
-    recon_sirt_lerp,
-    recon_nf,
+    recon_sirt_nvs,
     recon_sirt_biharmonic,
     recon_sirt_ns,
     recon_sirt_fmm,
     recon_sirt_tv,
-    recon_sirt_gs,
+    recon_gs,
 ]
 all_phantoms = [
     (phantom - phantom.min()) / (phantom.max() - phantom.min())
@@ -546,8 +464,7 @@ all_phantoms = [
 titles_sino_plot = [
     "Full Sinogram",
     "Training Set Sinogram",
-    "NeRF Sinogram",
-    "LERP Sinogram",
+    "NVS Sinogram",
     "Biharmonic Sinogram",
     "NS Sinogram",
     "FMM Sinogram",
@@ -555,10 +472,9 @@ titles_sino_plot = [
     "GS Sinogram",
 ]
 all_ct_imgs = [
-    ct_imgs_full_nf,
+    ct_imgs_full,
     ct_imgs_train_set,
-    ct_imgs_nf,
-    ct_imgs_lerp,
+    ct_imgs_nvs,
     ct_imgs_biharmonic,
     ct_imgs_ns,
     ct_imgs_fmm,
@@ -569,108 +485,8 @@ all_ct_imgs = [
 print("Global min:", min(phantom.min() for phantom in all_phantoms))
 print("Global max:", max(phantom.max() for phantom in all_phantoms))
 
-# %% Plot Phantoms
-
-fig, axes = plt.subplots(2, 5, figsize=(25, 10))
-axes = axes.flatten()
-phantom_idx = len(gt_phantom_nf) // 2
-for ax, title, phantom in zip(axes, titles_phantom_plot, all_phantoms):
-    ax.imshow(
-        phantom[phantom_idx],
-        cmap="gray",
-        vmin=0,
-        vmax=1,
-        aspect="auto",
-    )
-    ax.set_title(title, fontsize=20)
-    ax.axis("off")
-
-
-# %% Make Sinograms
-
-gt_sino_nf = ct_imgs_full_nf.swapaxes(0, 1)
-gt_sino_gs = ct_imgs_full_gs.swapaxes(0, 1)
-assert gt_sino_nf.shape == gt_sino_gs.shape, "GT sinograms should be the same shape"
-sino_idx = len(gt_sino_nf) // 2
-
-# %% Plot Sinograms
-fig, axes = plt.subplots(2, 5, figsize=(25, 10))
-axes = axes.flatten()
-for ax, title, imgs in zip(axes[1:], titles_sino_plot, all_ct_imgs):
-    pred_img = imgs.swapaxes(0, 1)[sino_idx]
-    ax.imshow(
-        pred_img,
-        cmap="gray",
-        vmin=0,
-        vmax=1,
-        aspect="auto",
-    )
-    ax.set_title(title, fontsize=20)
-    ax.axis("off")
-
-for ax in axes:
-    ax.axis("off")
-plt.show()
-
-# %% Plot Sinogram Diffs
-fig, axes = plt.subplots(2, 5, figsize=(25, 10))
-axes = axes.flatten()
-for i, (ax, title, imgs) in enumerate(
-    zip(axes[2:], titles_sino_plot[1:], all_ct_imgs[1:])
-):
-    pred_img = imgs.swapaxes(0, 1)[sino_idx]
-    gt_img = gt_sino_nf[sino_idx]
-    sino_diff = np.abs(pred_img - gt_img)
-    ax.imshow(
-        sino_diff,
-        vmin=0,
-        vmax=1,
-        aspect="auto",
-        cmap="magma",
-    )
-    ax.set_title(title, fontsize=20)
-
-for ax in axes:
-    ax.axis("off")
-plt.show()
-# %% # TODO add SSIM
-
-
-# %% Get metrics
-def get_metrics_phantom(
-    gt_phantom: np.ndarray, titles: list[str], recons: list[np.ndarray]
-) -> pd.DataFrame:
-    metrics = []
-    for title, recon in tqdm.tqdm(zip(titles, recons), total=len(titles)):
-        ssim_val = utils.ssim_3d(recon, gt_phantom)
-        psnr_val = utils.psnr(recon, gt_phantom)
-
-        # botch
-        if title == "GS Reconstruction":
-            print("[Botch] Use different phantom for GS")
-            ssim_val = utils.ssim_3d(recon_gs, gt_phantom_gs)
-            psnr_val = utils.psnr(recon_gs, gt_phantom_gs)
-
-        metrics.append((title, ssim_val, psnr_val))
-    return pd.DataFrame(
-        metrics,
-        columns=["Method", "SSIM", "PSNR"],
-    )
-
-
-df_metrics = get_metrics_phantom(gt_phantom_nf, titles_phantom_plot, all_phantoms)
-df_metrics
-# %% Save metrics
-path_df = Path(folder) / Path(f"{title_df}.csv")
-
-df_metrics.to_csv(path_df, index=False)
-df_metrics
-
 
 # %%
-assert False, "TODO: Remove this"
-
-
 @dataclass
 class Method:
     title: str
@@ -801,7 +617,7 @@ sliced_methods = [
     Method(title, phantom) for title, phantom in zip(titles_phantom_plot, all_phantoms)
 ]
 evaluate_methods(
-    len(gt_phantom_nf) // 2,
+    len(gt_phantom) // 2,
     sliced_methods,
     is_sinogram=False,
 )
@@ -834,7 +650,7 @@ def get_metrics_phantom(gt_phantom: np.ndarray, methods: list[Method]) -> pd.Dat
     )
 
 
-df_metrics = get_metrics_phantom(gt_phantom_nf, sliced_methods)
+df_metrics = get_metrics_phantom(gt_phantom, sliced_methods)
 # %% Save metrics
 path_df = Path(folder) / Path(f"{title_df}.csv")
 
