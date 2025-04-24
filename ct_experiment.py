@@ -20,6 +20,7 @@ from skimage.metrics import structural_similarity as ssim
 from typing import Any, Literal, Union
 from pathlib import Path
 from dataclasses import dataclass
+import sys
 
 # %%
 # #GPU
@@ -67,12 +68,26 @@ ExperimentDataKey = Literal[
     "psnrs",
     "train pattern",
 ]
-
 # %%
+# Parse CLI arguments
+USE_COLORBAR = False
+
+SHOW_PLOT = True
+CLI_MODE = False
+
+if CLI_MODE:
+    if len(sys.argv) != 3:
+        raise ValueError(
+            "Usage: python ct_experiment.py <path_to_base_folder> <phantom_index>"
+        )
+    fp_base = Path(sys.argv[1])
+    ph_idx = int(sys.argv[2])
+else:
+    fp_base = Path("results/sparse-256")
+    ph_idx = 16
+
 # Load Gaussian Data
-fp_base = Path("./results/limited/64")
-ph_idx = 13
-nf_pkl_matches = list(fp_base.glob(f"limited_scan_ph-{ph_idx}_*.pkl"))
+nf_pkl_matches = list(fp_base.glob(f"*_ph-{ph_idx}_*.pkl"))
 assert len(nf_pkl_matches) == 1, "There should exactly one pkl file"
 path_to_data = nf_pkl_matches[0]
 
@@ -114,6 +129,7 @@ full_scanner = ct_scan.AstraScanVec3D(
     gt_phantom_nf.shape, full_spherical_angles, img_res=img_res
 )
 part_scaner = None
+sino_idx = ct_imgs_full_nf.shape[1] // 2
 
 psnrs = experiment_data["psnrs"]
 plt.plot(psnrs)
@@ -121,9 +137,16 @@ plt.plot(psnrs)
 if not (test_type == "limited scan" or test_type == "sparse scan"):
     raise ValueError("Invalid test type")
 
-title_df = f"metrics_{experiment_data['phantom index']}_{experiment_data['test type']}"
-title_df = title_df.replace(" ", "_")
-folder = f"results/out/dump_[{experiment_data['test type']}][{experiment_data['phantom index']}]#{utils.get_concise_timestamp()}"
+num_scans = experiment_data["number of scans"]
+folder = f"./out/dump_[{experiment_data['test type']}][{experiment_data['phantom index']}][{num_scans}]#{utils.get_concise_timestamp()}"
+
+
+def plot_fig(title: str):
+    plt.savefig(f"{folder}/{title}.png", dpi=300)
+    if SHOW_PLOT:
+        plt.show()
+    plt.clf()
+
 
 # Create and save desc
 Path(folder).mkdir(parents=True, exist_ok=True)
@@ -139,7 +162,6 @@ if test_type == "limited scan":
     )
 
     limited_indices = experiment_data["limited indices"]
-    ct_train_set_imgs = ct_imgs_full_nf[limited_indices]
 
     # angle biz
     part_scan_angles = np.array(experiment_data["limited scan angles"])
@@ -153,7 +175,6 @@ if test_type == "sparse scan":
     )
 
     limited_indices = list(range(0, len(ct_imgs_full_nf), 2))
-    ct_train_set_imgs = ct_imgs_full_nf[limited_indices]
 
     # angle biz
     part_scan_angles = np.array(experiment_data["train scan angles"])
@@ -171,9 +192,8 @@ utils.plot_angles(
     limited_indices,
     title="Full Scan Angles",
 )
-
-# TODO : Make algorthims work better by updating mask and ct_imgs_train_set with a
-#   np.roll of offset=12 in axis=0
+plt.tight_layout()
+plot_fig("full_scan_angles")
 
 
 # %% [markdown]
@@ -196,9 +216,35 @@ mask = get_mask(
     limited_indices,
 )
 
+
+# %% Rolled data
+# To Make algorithms work better by updating mask and ct_imgs_train_set with a
+#   np.roll of offset=12 in axis=0
+
+
+def roll_forward(arr: np.ndarray, roll_amount: int = -12) -> np.ndarray:
+    return np.roll(arr, shift=roll_amount, axis=0)
+
+
+def roll_backward(arr: np.ndarray, roll_amount: int = 12) -> np.ndarray:
+    return np.roll(arr, shift=roll_amount, axis=0)
+
+
+ct_imgs_train_set_rolled = roll_forward(ct_imgs_train_set)
+mask_rolled = roll_forward(mask)
+
+fig, ax = plt.subplots(1, 2)
+ax[0].imshow(
+    ct_imgs_train_set_rolled.swapaxes(0, 1)[sino_idx], cmap="gray", aspect="auto"
+)
+ax[0].set_title("Rolled CT Images")
+ax[1].imshow(mask_rolled, cmap="gray", aspect="auto")
+ax[1].set_title("Rolled Mask")
+plt.tight_layout()
+plot_fig("rolled_mask")
+
+
 # %% Biharmonic
-
-
 def inpaint_sinogram_slice(sinogram: np.ndarray, mask: np.ndarray):
     return inpaint_biharmonic(sinogram, mask, channel_axis=None)
 
@@ -211,10 +257,11 @@ def inpaint_sinogram(sinogram: np.ndarray, mask: np.ndarray):
     return inpainted_sinogram
 
 
-ct_imgs_biharmonic = inpaint_sinogram(
-    ct_imgs_train_set.swapaxes(0, 1),
-    mask,
+ct_imgs_biharmonic_rolled = inpaint_sinogram(
+    ct_imgs_train_set_rolled.swapaxes(0, 1),
+    mask_rolled,
 ).swapaxes(0, 1)
+ct_imgs_biharmonic = roll_backward(ct_imgs_biharmonic_rolled)
 
 # %% Tela FMM & Navier Stokes
 InpaintMethodFlagType = Literal[
@@ -263,19 +310,21 @@ def inpaint_sinogram_opencv(
     return inpainted_sinogram
 
 
-ct_imgs_ns = inpaint_sinogram_opencv(
-    ct_imgs_train_set.swapaxes(0, 1),
-    mask,
+ct_imgs_ns_rolled = inpaint_sinogram_opencv(
+    ct_imgs_train_set_rolled.swapaxes(0, 1),
+    mask_rolled,
     method=cv2.INPAINT_NS,
     inpaint_radius=INFIL_INPAINT_RADIUS,
 ).swapaxes(0, 1)
+ct_imgs_ns = roll_backward(ct_imgs_ns_rolled)
 
 ct_imgs_fmm = inpaint_sinogram_opencv(
-    ct_imgs_train_set.swapaxes(0, 1),
-    mask,
+    ct_imgs_train_set_rolled.swapaxes(0, 1),
+    mask_rolled,
     method=cv2.INPAINT_TELEA,
     inpaint_radius=16,
 ).swapaxes(0, 1)
+ct_imgs_fmm = roll_backward(ct_imgs_fmm)
 
 
 # %% TVR De-Noising
@@ -354,43 +403,20 @@ def inpaint_tv_pytorch(
     plt.title("TV Inpainting Loss")
     plt.xlabel("Iteration")
     plt.ylabel("Loss (log scale)")
-    plt.savefig(f"{folder}/inpaint_tv_pytorch#{np.random.randint(9999)}.png", dpi=300)
-    plt.show()
+    plt.tight_layout()
+    plot_fig("tv_loss")
 
     return sino_tv
 
 
-offset = 12
-ct_imgs_train_set_rolled = np.roll(
-    ct_imgs_train_set,
-    shift=-offset,
-    axis=0,
-)
-mask_rolled = np.roll(
-    mask,
-    shift=-offset,
-    axis=0,
-)
-
-ct_imgs_tv = inpaint_tv_pytorch(
+ct_imgs_tv_rolled = inpaint_tv_pytorch(
     ct_imgs_train_set_rolled.swapaxes(0, 1),
     mask_rolled,
 ).swapaxes(0, 1)
-ct_imgs_tv = np.roll(
-    ct_imgs_tv,
-    shift=offset,
-    axis=0,
-)
+ct_imgs_tv = roll_backward(ct_imgs_tv_rolled)
 
-plt.imshow(
-    np.abs(ct_imgs_train_set - ct_imgs_tv).swapaxes(0, 1)[128],
-)
-plt.colorbar()
-plt.show()
 
 # %% Lerp
-
-
 def lerp_ct_imgs(
     ct_imgs: np.ndarray,
     indices_mask: list[int] = None,
@@ -433,6 +459,7 @@ def lerp_ct_imgs(
 indices_mask = np.zeros(len(ct_imgs_full_nf))
 indices_mask[limited_indices] = 1
 
+# Rolls automatically
 ct_imgs_lerp = lerp_ct_imgs(
     ct_imgs_train_set,
     indices_mask,
@@ -443,40 +470,34 @@ plt.imshow(
     np.roll(ct_imgs_lerp.swapaxes(0, 1)[ct_imgs_lerp.shape[1] // 2], 12, axis=0),
     aspect=3,
 )
-plt.show()
-
-# %%
-sirt_iter = 256
-
-recon_sirt_full = full_scanner.reconstruct_3d_volume_sirt(
-    ct_imgs_full_nf, num_iterations=sirt_iter
-)
-recon_sirt_train_set = part_scaner.reconstruct_3d_volume_sirt(
-    ct_train_set_imgs, num_iterations=sirt_iter
-)
-recon_sirt_biharmonic = full_scanner.reconstruct_3d_volume_sirt(
-    ct_imgs_biharmonic, num_iterations=sirt_iter
-)
-recon_sirt_ns = full_scanner.reconstruct_3d_volume_sirt(
-    ct_imgs_ns, num_iterations=sirt_iter
-)
-recon_sirt_fmm = full_scanner.reconstruct_3d_volume_sirt(
-    ct_imgs_fmm, num_iterations=sirt_iter
-)
-recon_sirt_tv = full_scanner.reconstruct_3d_volume_sirt(
-    ct_imgs_tv, num_iterations=sirt_iter
-)
-recon_sirt_gs = full_scanner.reconstruct_3d_volume_sirt(
-    ct_imgs_gs, num_iterations=sirt_iter
-)
-recon_sirt_lerp = full_scanner.reconstruct_3d_volume_sirt(
-    ct_imgs_lerp, num_iterations=sirt_iter
-)
+plt.tight_layout()
+plot_fig("rolled_lerp")
 
 
-# %% Setup
-# normalize all gt, nvs and part reconstructions
-
+# %% Sinogram Data Setup
+titles_sino_plot = [
+    "Full Sinogram",
+    "Training Set Sinogram",
+    "LERP Sinogram",
+    "NeRF Sinogram",
+    "Biharmonic Sinogram",
+    "NS Sinogram",
+    "FMM Sinogram",
+    "TV Sinogram",
+    "GS Sinogram",
+]
+all_ct_imgs = [
+    ct_imgs_full_nf,
+    ct_imgs_train_set,
+    ct_imgs_lerp,
+    ct_imgs_nf,
+    ct_imgs_biharmonic,
+    ct_imgs_ns,
+    ct_imgs_fmm,
+    ct_imgs_tv,
+    ct_imgs_gs,
+]
+# %% Reoncstruction
 titles_phantom_plot = [
     "GT Slice",
     "Full Scan Reconstruction",
@@ -489,67 +510,40 @@ titles_phantom_plot = [
     "TV Reconstruction",
     "GS Reconstruction",
 ]
-all_phantoms = [
-    gt_phantom_nf,
-    recon_sirt_full,
-    recon_sirt_train_set,
-    recon_sirt_lerp,
-    recon_nf,
-    recon_sirt_biharmonic,
-    recon_sirt_ns,
-    recon_sirt_fmm,
-    recon_sirt_tv,
-    recon_sirt_gs,
-]
-all_phantoms = [
-    (phantom - phantom.min()) / (phantom.max() - phantom.min())
-    for phantom in all_phantoms
-]
+all_reconstructions = [gt_phantom_nf]
+use_part_scanner_idx = 1
+for i, ct_imgs in enumerate(tqdm.tqdm(all_ct_imgs, desc="Reconstructing volumes")):
+    if i == use_part_scanner_idx:
+        ct_imgs = ct_imgs[limited_indices]
+        scanner = part_scaner
+    else:
+        scanner = full_scanner
 
+    recon = scanner.reconstruct_3d_volume_sirt(ct_imgs, num_iterations=256)
+    recon = normalize_data(recon)
+    all_reconstructions.append(recon)
 
-titles_sino_plot = [
-    "Full Sinogram",
-    "Training Set Sinogram",
-    "NeRF Sinogram",
-    "LERP Sinogram",
-    "Biharmonic Sinogram",
-    "NS Sinogram",
-    "FMM Sinogram",
-    "TV Sinogram",
-    "GS Sinogram",
-]
-all_ct_imgs = [
-    ct_imgs_full_nf,
-    ct_imgs_train_set,
-    ct_imgs_nf,
-    ct_imgs_lerp,
-    ct_imgs_biharmonic,
-    ct_imgs_ns,
-    ct_imgs_fmm,
-    ct_imgs_tv,
-    ct_imgs_gs,
-]
-
-print("Global min:", min(phantom.min() for phantom in all_phantoms))
-print("Global max:", max(phantom.max() for phantom in all_phantoms))
-
-
-# %% Make Sinograms
-
+print(
+    "Reconstruction Global min:", min(phantom.min() for phantom in all_reconstructions)
+)
+print(
+    "Reconstruction Global max:", max(phantom.max() for phantom in all_reconstructions)
+)
+# %%
+# Make Sinograms
 gt_sino_nf = ct_imgs_full_nf.swapaxes(0, 1)
 gt_sino_gs = ct_imgs_full_gs.swapaxes(0, 1)
 assert gt_sino_nf.shape == gt_sino_gs.shape, "GT sinograms should be the same shape"
-sino_idx = len(gt_sino_nf) // 2
 
 # %% [markdown]
 # ## Plotting
 
-# %% Plot Phantoms
-
+# %%
+# Plot Phantoms
 fig, axes = plt.subplots(2, 5, figsize=(25, 10))
 axes = axes.flatten()
 phantom_idx = len(gt_phantom_nf) // 2
-for ax, title, phantom in zip(axes, titles_phantom_plot, all_phantoms):
+for ax, title, phantom in zip(axes, titles_phantom_plot, all_reconstructions):
     im = ax.imshow(
         phantom[phantom_idx],
         cmap="gray",
@@ -561,17 +555,20 @@ for ax, title, phantom in zip(axes, titles_phantom_plot, all_phantoms):
     ax.axis("off")
 
 # Add a colorbar
-cbar = fig.colorbar(im, ax=axes, orientation="vertical", fraction=0.046, pad=0.04)
-cbar.set_label("Intensity (a.u.)", fontsize=16)
-cbar.ax.tick_params(labelsize=12)
+if USE_COLORBAR:
+    cbar = fig.colorbar(im, ax=axes, orientation="vertical", fraction=0.046, pad=0.04)
+    cbar.set_label("Intensity (a.u.)", fontsize=16)
+    cbar.ax.tick_params(labelsize=12)
+else:
+    plt.tight_layout()
+plot_fig("phantom")
 
-plt.show()
-
-# %% Plot Sinograms
+# %%
+# Plot Sinograms
 fig, axes = plt.subplots(2, 5, figsize=(25, 10))
 axes = axes.flatten()
-for ax, title, imgs in zip(axes[1:], titles_sino_plot, all_ct_imgs):
-    pred_img = imgs.swapaxes(0, 1)[sino_idx]
+for ax, title, ct_imgs in zip(axes[1:], titles_sino_plot, all_ct_imgs):
+    pred_img = ct_imgs.swapaxes(0, 1)[sino_idx]
     im = ax.imshow(
         pred_img,
         cmap="gray",
@@ -586,19 +583,21 @@ for ax in axes:
     ax.axis("off")
 
 # Add a colorbar
-cbar = fig.colorbar(im, ax=axes, orientation="vertical", fraction=0.046, pad=0.04)
-cbar.set_label("Intensity (a.u.)", fontsize=16)
-cbar.ax.tick_params(labelsize=12)
-
-plt.show()
+if USE_COLORBAR:
+    cbar = fig.colorbar(im, ax=axes, orientation="vertical", fraction=0.046, pad=0.04)
+    cbar.set_label("Intensity (a.u.)", fontsize=16)
+    cbar.ax.tick_params(labelsize=12)
+else:
+    plt.tight_layout()
+plot_fig("sinogram")
 
 # %% Plot Sinogram Abs Diffs
 fig, axes = plt.subplots(2, 5, figsize=(25, 10))
 axes = axes.flatten()
-for i, (ax, title, imgs) in enumerate(
+for i, (ax, title, ct_imgs) in enumerate(
     zip(axes[2:], titles_sino_plot[1:], all_ct_imgs[1:])
 ):
-    pred_img = imgs.swapaxes(0, 1)[sino_idx]
+    pred_img = ct_imgs.swapaxes(0, 1)[sino_idx]
     gt_img = gt_sino_nf[sino_idx]
     sino_diff = np.abs(pred_img - gt_img)
     im = ax.imshow(
@@ -614,11 +613,13 @@ for ax in axes:
     ax.axis("off")
 
 # Add a colorbar
-cbar = fig.colorbar(im, ax=axes, orientation="vertical", fraction=0.046, pad=0.04)
-cbar.set_label("Absolute Deviation (a.u.)", fontsize=16)
-cbar.ax.tick_params(labelsize=12)
-
-plt.show()
+if USE_COLORBAR:
+    cbar = fig.colorbar(im, ax=axes, orientation="vertical", fraction=0.046, pad=0.04)
+    cbar.set_label("Absolute Deviation (a.u.)", fontsize=16)
+    cbar.ax.tick_params(labelsize=12)
+else:
+    plt.tight_layout()
+plot_fig("sinogram_abs_diff")
 
 # %%
 # %% Plot Sinogram SSIM Gradients
@@ -629,11 +630,11 @@ ssim_gradient_imgs = np.array(
     [
         ssim(
             gt_sino_nf[sino_idx],
-            imgs.swapaxes(0, 1)[sino_idx],
+            ct_imgs.swapaxes(0, 1)[sino_idx],
             gradient=True,
             data_range=1.0,
         )[1]
-        for imgs in all_ct_imgs[1:]
+        for ct_imgs in all_ct_imgs[1:]
     ]
 )
 
@@ -656,13 +657,17 @@ for ax in axes:
     ax.axis("off")
 
 # Add a colorbar
-cbar = fig.colorbar(im, ax=axes, orientation="vertical", fraction=0.046, pad=0.04)
-cbar.set_label("Pointwise SSIM Gradient (a.u.)", fontsize=16, labelpad=22)
-cbar.ax.tick_params(labelsize=12)
-plt.show()
+if USE_COLORBAR:
+    cbar = fig.colorbar(im, ax=axes, orientation="vertical", fraction=0.046, pad=0.04)
+    cbar.set_label("Pointwise SSIM Gradient (a.u.)", fontsize=16, labelpad=22)
+    cbar.ax.tick_params(labelsize=12)
+else:
+    plt.tight_layout()
+plot_fig("sinogram_ssim_grad")
 
 
-# %% Get metrics
+# %%
+# Get metrics
 def get_metrics_phantom(
     titles: list[str], recons: list[np.ndarray], gs_idx: int
 ) -> pd.DataFrame:
@@ -671,8 +676,6 @@ def get_metrics_phantom(
         enumerate(zip(titles, recons)), total=len(titles)
     ):
         gt = gt_phantom_gs if i == gs_idx else gt_phantom_nf
-        print(i, gt.std())
-
         ssim_val = utils.ssim_3d(recon, gt)
         psnr_val = utils.psnr(recon, gt)
 
@@ -685,187 +688,12 @@ def get_metrics_phantom(
 
 df_metrics = get_metrics_phantom(
     titles_phantom_plot,
-    all_phantoms,
+    all_reconstructions,
     9,
 )
-df_metrics
-# %% Save metrics
-path_df = Path(folder) / Path(f"{title_df}.csv")
-
-df_metrics.to_csv(path_df, index=False)
-df_metrics
-
-
 # %%
-assert False, "TODO: Remove this"
-
-
-@dataclass
-class Method:
-    title: str
-    reconstructed_images: np.ndarray
-
-
-def plot_methods(
-    target_idx: int,
-    methods: list[Method],
-    is_sinogram: bool = False,
-    save_title: str = "xxx",
-):
-    n_cols = 4
-    len_methods = len(methods) + (1 if is_sinogram else 0)
-    n_rows = math.ceil(len_methods / n_cols)
-    fig, axs = plt.subplots(
-        n_rows, n_cols, figsize=(n_cols * 5.1, n_rows * 5), constrained_layout=True
-    )
-    axs = axs.flatten()
-
-    method_idx = 0
-    for i, ax in enumerate(axs):
-        # Skip the first subplot if it's a sinogram, as this where the GT is shown
-        if is_sinogram and i == 0:
-            continue
-
-        method = methods[method_idx]
-        method_idx += 1
-
-        im = ax.imshow(
-            method.reconstructed_images[target_idx],
-            cmap="gray",
-            vmin=0,
-            vmax=1,
-            aspect="auto",
-        )
-        ax.set_title(method.title, fontsize=20)
-        ax.axis("off")
-
-    # remove empty subplots
-    for i in range(len(axs)):
-        axs[i].axis("off")
-
-    # Add a colorbar
-    cbar = fig.colorbar(
-        im, ax=axs, orientation="vertical", fraction=0.046, pad=0.04, aspect=40
-    )
-    cbar.set_label("Intensity (a.u.)", labelpad=20, fontsize=20)
-    cbar.ax.tick_params(labelsize=14)
-
-    fig.savefig(f"{folder}/{save_title}.png", dpi=300)
-    plt.show()
-
-
-MetricMethods = Literal["SSIM", "Absoulte Difference"]
-
-
-def compare_methods(
-    target_idx: int,
-    metric: MetricMethods,
-    methods: list[Method],
-    is_sinogram: bool = False,
-    save_title: str = "xxx",
-):
-    gt_method = methods[0]
-
-    n_cols = 4
-    len_methods = len(methods) + (1 if is_sinogram else 0)
-    n_rows = math.ceil(len_methods / n_cols)
-    fig, axs = plt.subplots(
-        n_rows, n_cols, figsize=(n_cols * 5.1, n_rows * 5), constrained_layout=True
-    )
-    axs = axs.flatten()
-
-    method_idx = 1
-    for i, ax in enumerate(axs):
-        if i == 0:
-            # we skip this as its where the GT is shown
-            continue
-        if is_sinogram and i == 1:
-            # we skip this on sinogram as this what we compare to
-            continue
-
-        method = methods[method_idx]
-        method_idx += 1
-
-        if metric == "SSIM":
-            _, cmp_img = ssim(
-                gt_method.reconstructed_images[target_idx],
-                method.reconstructed_images[target_idx],
-                full=True,
-                data_range=1.0,
-            )
-        if metric == "Absoulte Difference":
-            cmp_img = np.abs(
-                gt_method.reconstructed_images[target_idx]
-                - method.reconstructed_images[target_idx]
-            )
-
-        im = ax.imshow(cmp_img, vmin=0, vmax=1, cmap="magma", aspect="auto")
-        ax.set_title(method.title, fontsize=20)
-
-    # remove empty subplots
-    for i in range(len(axs)):
-        axs[i].axis("off")
-
-    # add a colorbar
-    cbar = fig.colorbar(
-        im, ax=axs, orientation="vertical", fraction=0.046, pad=0.04, aspect=40
-    )
-    cbar.set_label(f"{metric} (a.u.)", labelpad=20, fontsize=20)
-    cbar.ax.tick_params(labelsize=14)
-
-    fig.savefig(f"{folder}/{save_title}.png", dpi=300)
-    plt.show()
-
-
-def evaluate_methods(target_idx: int, methods: list[Method], is_sinogram: bool = False):
-    plot_methods(target_idx, methods, is_sinogram)
-    prefix = "sino" if is_sinogram else "phantom"
-    compare_methods(
-        target_idx, "Absoulte Difference", methods, is_sinogram, f"{prefix}-abs"
-    )
-    compare_methods(target_idx, "SSIM", methods, is_sinogram, f"{prefix}-ssim")
-
-
-sliced_methods = [
-    Method(title, phantom) for title, phantom in zip(titles_phantom_plot, all_phantoms)
-]
-evaluate_methods(
-    len(gt_phantom_nf) // 2,
-    sliced_methods,
-    is_sinogram=False,
-)
-
-
-# %% # Sinogram
-sinogramed_methods = [
-    Method(title, ct_imgs.swapaxes(0, 1))
-    for title, ct_imgs in zip(titles_sino_plot, all_ct_imgs)
-]
-idx = sinogramed_methods[0].reconstructed_images.shape[0] // 2
-
-evaluate_methods(
-    idx,
-    sinogramed_methods,
-    is_sinogram=True,
-)
-
-
-# %% Get metrics
-def get_metrics_phantom(gt_phantom: np.ndarray, methods: list[Method]) -> pd.DataFrame:
-    metrics = []
-    for method in methods:
-        ssim_val = utils.ssim_3d(method.reconstructed_images, gt_phantom)
-        psnr_val = utils.psnr(method.reconstructed_images, gt_phantom)
-        metrics.append((method.title, ssim_val, psnr_val))
-    return pd.DataFrame(
-        metrics,
-        columns=["Method", "SSIM", "PSNR"],
-    )
-
-
-df_metrics = get_metrics_phantom(gt_phantom_nf, sliced_methods)
-# %% Save metrics
+# Save metrics
+title_df = f"metrics-{'limited' if test_type == 'limited scan' else 'sparse'}-{experiment_data['phantom index']}-{num_scans}"
 path_df = Path(folder) / Path(f"{title_df}.csv")
-
 df_metrics.to_csv(path_df, index=False)
 df_metrics

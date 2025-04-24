@@ -458,5 +458,3 @@ def plot_angles(angles: np.ndarray, limited_indices: list[int] = None, title: st
     ax.set_xlim([-1, 1])
     ax.set_ylim([-1, 1])
     ax.set_zlim([-1, 1])
-
-    plt.show()
