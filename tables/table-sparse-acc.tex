@@ -1,0 +1,16 @@
+\begin{tabular}{|l|c|c|}
+\toprule
+ & SSIM & PSNR \\
+Method &  &  \\
+\midrule
+SIRT Full Set & 0.386 & 68.642 \\
+SIRT Train Set & 0.361 & 66.814 \\
+LERP & \cellcolor{rankthird}0.377 & \cellcolor{rankthird}68.433 \\
+NeRF & 0.354 & \cellcolor{rankworst}64.745 \\
+Biharmonic & \cellcolor{ranksecond}0.382 & \cellcolor{ranksecond}68.727 \\
+Navier-Stokes & 0.365 & 67.535 \\
+Fast Marching Method & \cellcolor{rankworst}0.344 & 64.772 \\
+TVR & 0.368 & 66.873 \\
+Gaussian Splatting & \cellcolor{rankfirst}0.916 & \cellcolor{rankfirst}72.704 \\
+\bottomrule
+\end{tabular}

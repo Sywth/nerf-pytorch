@@ -27,6 +27,9 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 # np.random.seed(0) # NOTE : DEBUG : Commented out as i call train
 DEBUG = False
 
+# NOTE : DEBUG
+USE_MONO_CT = False
+
 
 def batchify(fn, chunk):
     """Constructs a version of 'fn' that applies to smaller batches."""
@@ -174,6 +177,7 @@ def render_path(
     savedir=None,
     render_factor=0,
 ):
+    # NOTE : TODO : Consider if USE_MONO_CT needs to be considered here?
 
     H, W, focal = hwf
 
@@ -218,6 +222,11 @@ def render_path(
 
 def create_nerf(args):
     """Instantiate NeRF's MLP model."""
+
+    if args.use_mono_ct:
+        global USE_MONO_CT
+        USE_MONO_CT = True
+
     embed_fn, input_ch = get_embedder(args.multires, args.i_embed)
 
     input_ch_views = 0
@@ -226,29 +235,48 @@ def create_nerf(args):
         embeddirs_fn, input_ch_views = get_embedder(args.multires_views, args.i_embed)
     output_ch = 5 if args.N_importance > 0 else 4
     skips = [4]
-    model = NeRF(
-        D=args.netdepth,
-        W=args.netwidth,
-        input_ch=input_ch,
-        output_ch=output_ch,
-        skips=skips,
-        input_ch_views=input_ch_views,
-        use_viewdirs=args.use_viewdirs,
-    ).to(device)
-    grad_vars = list(model.parameters())
 
-    model_fine = None
-    if args.N_importance > 0:
-        model_fine = NeRF(
-            D=args.netdepth_fine,
-            W=args.netwidth_fine,
+    if args.use_mono_ct:
+        model = NerfMonoCt(
+            D=args.netdepth,
+            W=args.netwidth,
+            input_ch=input_ch,
+            skips=skips,
+        ).to(device)
+        grad_vars = list(model.parameters())
+    else:
+        model = NeRF(
+            D=args.netdepth,
+            W=args.netwidth,
             input_ch=input_ch,
             output_ch=output_ch,
             skips=skips,
             input_ch_views=input_ch_views,
             use_viewdirs=args.use_viewdirs,
         ).to(device)
-        grad_vars += list(model_fine.parameters())
+        grad_vars = list(model.parameters())
+
+    model_fine = None
+    if args.N_importance > 0:
+        if args.use_mono_ct:
+            model_fine = NerfMonoCt(
+                D=args.netdepth_fine,
+                W=args.netwidth_fine,
+                input_ch=input_ch,
+                skips=skips,
+            ).to(device)
+            grad_vars += list(model_fine.parameters())
+        else:
+            model_fine = NeRF(
+                D=args.netdepth_fine,
+                W=args.netwidth_fine,
+                input_ch=input_ch,
+                output_ch=output_ch,
+                skips=skips,
+                input_ch_views=input_ch_views,
+                use_viewdirs=args.use_viewdirs,
+            ).to(device)
+            grad_vars += list(model_fine.parameters())
 
     network_query_fn = lambda inputs, viewdirs, network_fn: run_network(
         inputs,
@@ -294,6 +322,13 @@ def create_nerf(args):
 
     ##########################
 
+    assert (
+        args.use_mono_ct == USE_MONO_CT
+    ), f"Inconsistent global : args.use_mono_ct={args.use_mono_ct}, USE_MONO_CT={USE_MONO_CT}"
+    assert not (
+        args.use_mono_ct and args.use_viewdirs
+    ), "Cannot use_mono_ct and use_viewdirs at the same time."
+
     render_kwargs_train = {
         "network_query_fn": network_query_fn,
         "perturb": args.perturb,
@@ -304,7 +339,7 @@ def create_nerf(args):
         "use_viewdirs": args.use_viewdirs,
         "white_bkgd": args.white_bkgd,
         "raw_noise_std": args.raw_noise_std,
-        "use_ortho": args.use_ortho, # NOTE :Added 
+        "use_ortho": args.use_ortho,  # NOTE :Added
     }
 
     # NDC only good for LLFF-style forward facing data
@@ -320,19 +355,9 @@ def create_nerf(args):
     return render_kwargs_train, render_kwargs_test, start, grad_vars, optimizer
 
 
-def raw2outputs(raw, z_vals, rays_d, raw_noise_std=0, white_bkgd=False, pytest=False):
-    """Transforms model's predictions to semantically meaningful values.
-    Args:
-        raw: [num_rays, num_samples along ray, 4]. Prediction from model.
-        z_vals: [num_rays, num_samples along ray]. Integration time.
-        rays_d: [num_rays, 3]. Direction of each ray.
-    Returns:
-        rgb_map: [num_rays, 3]. Estimated RGB color of a ray.
-        disp_map: [num_rays]. Disparity map. Inverse of depth map.
-        acc_map: [num_rays]. Sum of weights along each ray.
-        weights: [num_rays, num_samples]. Weights assigned to each sampled color.
-        depth_map: [num_rays]. Estimated distance to object.
-    """
+def raw2outputs_poly(
+    raw, z_vals, rays_d, raw_noise_std=0, white_bkgd=False, pytest=False
+):
     raw2alpha = lambda raw, dists, act_fn=F.relu: 1.0 - torch.exp(-act_fn(raw) * dists)
 
     dists = z_vals[..., 1:] - z_vals[..., :-1]
@@ -373,6 +398,75 @@ def raw2outputs(raw, z_vals, rays_d, raw_noise_std=0, white_bkgd=False, pytest=F
         rgb_map = rgb_map + (1.0 - acc_map[..., None])
 
     return rgb_map, disp_map, acc_map, weights, depth_map
+
+
+def raw2outputs_mono(
+    raw, z_vals, rays_d, raw_noise_std=0, white_bkgd=False, pytest=False
+):
+    # Compute distances between samples.
+    dists = z_vals[..., 1:] - z_vals[..., :-1]
+    # Append a large distance for the last interval.
+    dists = torch.cat(
+        [dists, torch.Tensor([1e10]).expand(dists[..., :1].shape).to(raw.device)], -1
+    )
+    # Multiply distances by the norm of ray directions.
+    dists = dists * torch.norm(rays_d[..., None, :], dim=-1)
+
+    # Add noise if needed.
+    noise = 0.0
+    if raw_noise_std > 0.0:
+        noise = torch.randn(raw[..., 0].shape, device=raw.device) * raw_noise_std
+        if pytest:
+            np.random.seed(0)
+            noise = torch.Tensor(
+                np.random.rand(*list(raw[..., 0].shape)) * raw_noise_std
+            ).to(raw.device)
+
+    # Compute per-sample alpha from sigma.
+    raw_sigma = raw[..., 0]
+    alpha = 1.0 - torch.exp(-F.relu(raw_sigma + noise) * dists)
+
+    # Compute weights using the cumulative product trick.
+    ones = torch.ones((alpha.shape[0], 1), device=raw.device)
+    cumprod_input = torch.cat([ones, 1.0 - alpha + 1e-10], -1)
+    cumprod = torch.cumprod(cumprod_input, -1)[:, :-1]
+    weights = alpha * cumprod
+
+    # Compute depth map and accumulated opacity.
+    depth_map = torch.sum(weights * z_vals, -1)
+    acc_map = torch.sum(weights, -1)
+    disp_map = 1.0 / torch.max(1e-10 * torch.ones_like(depth_map), depth_map / acc_map)
+
+    # Compute integrated sigma along each ray using the Beer–Lambert law.
+    integrated_sigma = torch.sum(F.relu(raw_sigma) * dists, -1)
+    T = torch.exp(-integrated_sigma)  # transmitted intensity
+    # Create a dummy rgb_map by replicating T across 3 channels.
+    rgb_map = T.unsqueeze(-1).repeat(1, 3)
+
+    if white_bkgd:
+        rgb_map = rgb_map + (1.0 - acc_map.unsqueeze(-1))
+
+    return rgb_map, disp_map, acc_map, weights, depth_map
+
+
+def raw2outputs(raw, z_vals, rays_d, raw_noise_std=0, white_bkgd=False, pytest=False):
+    """Transforms model's predictions to semantically meaningful values.
+    Args:
+        raw: [num_rays, num_samples along ray, 4]. Prediction from model.
+        z_vals: [num_rays, num_samples along ray]. Integration time.
+        rays_d: [num_rays, 3]. Direction of each ray.
+    Returns:
+        rgb_map: [num_rays, 3]. Estimated RGB color of a ray.
+        disp_map: [num_rays]. Disparity map. Inverse of depth map.
+        acc_map: [num_rays]. Sum of weights along each ray.
+        weights: [num_rays, num_samples]. Weights assigned to each sampled color.
+        depth_map: [num_rays]. Estimated distance to object.
+    """
+    global USE_MONO_CT
+    if USE_MONO_CT:
+        return raw2outputs_mono(raw, z_vals, rays_d, raw_noise_std, white_bkgd, pytest)
+    else:
+        return raw2outputs_poly(raw, z_vals, rays_d, raw_noise_std, white_bkgd, pytest)
 
 
 def render_rays(
@@ -427,7 +521,7 @@ def render_rays(
     near, far = bounds[..., 0], bounds[..., 1]  # [-1,1]
 
     t_vals = torch.linspace(0.0, 1.0, steps=N_samples)
-    if not lindisp: 
+    if not lindisp:
         z_vals = near * (1.0 - t_vals) + far * (t_vals)
     else:
         z_vals = 1.0 / (1.0 / near * (1.0 - t_vals) + 1.0 / far * (t_vals))
@@ -461,7 +555,6 @@ def render_rays(
     )
 
     if N_importance > 0:
-
         rgb_map_0, disp_map_0, acc_map_0 = rgb_map, disp_map, acc_map
 
         z_vals_mid = 0.5 * (z_vals[..., 1:] + z_vals[..., :-1])
@@ -706,7 +799,7 @@ def config_parser():
     parser.add_argument(
         "--i_print",
         type=int,
-        default=100,
+        default=1_000,
         help="frequency of console printout and metric loggin",
     )
     parser.add_argument(
@@ -765,14 +858,18 @@ def config_parser():
         default=False,
         help="Use orthographic projection instead of perspective",
     )
+    parser.add_argument(
+        "--use_mono_ct",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Use monochromatic CT model (i.e. output (sigma) instead of (rgb + sigma))",
+    )
     return parser
 
 
-def train(args):
-
-    # NOTE : DEBUG : I commented this out  
-    # parser = config_parser()
-    # args = parser.parse_args()
+def train(args, psnrs=None):
+    if psnrs is None:
+        psnrs = []
 
     # Load data
     K = None
@@ -865,7 +962,7 @@ def train(args):
     else:
         # NOTE : If code fails here, you may need --use_ortho flag
         H, W, focal = hwf
-    
+
     H, W = int(H), int(W)
     hwf = [H, W, focal]
 
@@ -951,7 +1048,7 @@ def train(args):
             )
 
             return
-        
+
     # Prepare raybatch tensor if batching random rays
     N_rand = args.N_rand
     use_batching = not args.no_batching
@@ -997,7 +1094,7 @@ def train(args):
 
     # NOTE : Reduced number of poses to reduce video render times
     # render_poses = render_poses[::4]
-    # NOTE : DEBUG : Added to change render_poses 
+    # NOTE : DEBUG : Added to change render_poses
     render_poses = poses[::8]
 
     start = start + 1
@@ -1081,6 +1178,18 @@ def train(args):
         )
 
         optimizer.zero_grad()
+
+        # NOTE : TODO : Consider if for the USE_MONO_CT case, we need to change the loss function
+        # NOTE : TODO : DEBUG : Fix the plotting and figure out how to do this properly
+        if DEBUG and i % 10 == 0:
+            fig, axes = plt.subplots(1, 2, figsize=(10, 5))
+            axes[0].imshow(rgb.detach().cpu().numpy())
+            axes[1].imshow(target_s.detach().cpu().numpy())
+            plt.show()
+
+            print(f"RGB shape: {rgb.shape}, Target shape: {target_s.shape}")
+            # RGB shape: torch.Size([1024, 3]), Target shape: torch.Size([1024, 3])
+
         img_loss = img2mse(rgb, target_s)
         trans = extras["raw"][..., -1]
         loss = img_loss
@@ -1129,7 +1238,12 @@ def train(args):
             # Turn on testing mode
             with torch.no_grad():
                 rgbs, disps = render_path(
-                    render_poses, hwf_rendering, K, args.chunk, args.use_ortho, render_kwargs_test
+                    render_poses,
+                    hwf_rendering,
+                    K,
+                    args.chunk,
+                    args.use_ortho,
+                    render_kwargs_test,
                 )
 
             print("Done, saving", rgbs.shape, disps.shape)
@@ -1193,8 +1307,16 @@ def train(args):
                 )
             print("Saved test set")
 
+        psnrs.append(psnr.item())
         if i % args.i_print == 0:
             tqdm.write(f"[TRAIN] Iter: {i} Loss: {loss.item()}  PSNR: {psnr.item()}")
+
+            plt.plot(psnrs)
+            plt.ylabel("PSNR")
+            plt.xlabel("Iterations")
+            plt.title("PSNRs")
+            plt.show()
+
         """
             print(expname, i, psnr.numpy(), loss.numpy(), global_step.numpy())
             print('iter time {:.05f}'.format(dt))

@@ -6,6 +6,10 @@
             "request": "launch",
             "program": "${file}",
             "console": "integratedTerminal",
+            "args": [
+                ".\\results\\limited\\64\\",
+                "4"
+            ],
             "x-args": [
                 "--config",
                 "configs/ct_data_13_256_64_684.txt",
@@ -23,7 +27,7 @@
                 "32768",
                 "--use_ortho"
             ],
-            "args": [
+            "23_args": [
                 "--config",
                 "configs/ct_data_13_320_64_741.txt",
                 "--dataset_type",

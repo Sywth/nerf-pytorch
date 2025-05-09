@@ -1,6 +1,6 @@
-expname = ct_data_4_256_32_945
+expname = ct_data_4_256_32_683
 basedir = ./logs/auto
-datadir = ./export/ct_data_4_256_32_945
+datadir = ./export/ct_data_4_256_32_683
 dataset_type = blender
 
 no_batching = True

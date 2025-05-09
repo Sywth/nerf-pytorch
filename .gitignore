@@ -12,3 +12,6 @@ figs/*
 !figs/.gitkeep
 
 export/*
+results/*
+phantoms/*
+out/*

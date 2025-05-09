@@ -6,16 +6,32 @@ import torch
 import datetime
 import random
 import string
+import hashlib
 
 from scipy.spatial.transform import Rotation
 from matplotlib import pyplot as plt
 from matplotlib.animation import FuncAnimation
 from scipy.ndimage import affine_transform
+from skimage.metrics import structural_similarity as ssim
 
+
+# %%
 def ceildiv(a, b):
     return -(-a // b)
 
 
+def get_concise_timestamp() -> str:
+    return datetime.datetime.now().strftime("%Y-%m-%d#%H-%M")
+
+
+def str_title_hash(string: str, base=257, mod=2**32) -> int:
+    hash_val = 0
+    for c in string:
+        hash_val = (hash_val * base + ord(c)) % mod
+    return hash_val
+
+
+# %%
 def extract_frames(
     video_path,
     output_folder,
@@ -162,7 +178,7 @@ def generate_camera_poses(angles: np.ndarray, radius: float = 4.0, axis="x"):
     poses = [compute_camera_matrix(theta, radius, axis) for theta in angles]
     return poses
 
-    
+
 def rotate_phantom_by_pose(phantom: np.ndarray, cam_pose: np.ndarray):
     """
     Rotate the phantom by the camera pose.
@@ -195,21 +211,40 @@ def mono_to_rgb(image):
     """
     return np.stack([image] * 3, axis=-1)
 
+
 def rgb_to_mono(image):
     """
     Convert image.shape == (H, W, 3) to image.shape == (H, W)
     """
     return np.mean(image, axis=-1)
 
+
 def lerp(v1, v2, t):
     return v1 + t * (v2 - v1)
 
-def psnr(img1 : np.ndarray, img2 : np.ndarray):
+
+def first(iterable, predicate):
+    return next((x for x in iterable if predicate(x)), None)
+
+
+def psnr(img1: np.ndarray, img2: np.ndarray):
     mse = np.mean((img1 - img2) ** 2)
     if mse == 0:
         return 100
     PIXEL_MAX = 255.0
     return 20 * np.log10(PIXEL_MAX / np.sqrt(mse))
+
+
+def ssim_3d(gt, recon):
+    assert gt.shape == recon.shape, "Input arrays must have the same shape"
+    H, W, D = gt.shape
+    ssim_total = 0.0
+    value_range = gt.max() - gt.min()
+    for i in range(D):
+        ssim_value = ssim(gt[:, :, i], recon[:, :, i], data_range=value_range)
+        ssim_total += ssim_value
+    return ssim_total / D
+
 
 # %% [markdown]
 # Functions for NeRF
@@ -312,7 +347,9 @@ def load_npz(fp, nerf_dtype=torch.float32):
 # %% [markdown]
 # Plotting rays
 # %%
-def plot_rays(ray_o: torch.Tensor, ray_d: torch.Tensor, scan_lim: float = 1.0):
+def plot_rays(
+    ray_o: torch.Tensor, ray_d: torch.Tensor, scan_lim: float = 1.0, title=""
+):
     ax = plt.figure().add_subplot(projection="3d")
     ax.set_proj_type("ortho")
     ax.quiver(
@@ -330,7 +367,7 @@ def plot_rays(ray_o: torch.Tensor, ray_d: torch.Tensor, scan_lim: float = 1.0):
     ax.set_xlim(-scan_lim, scan_lim)
     ax.set_ylim(-scan_lim, scan_lim)
     ax.set_zlim(-scan_lim, scan_lim)
-
+    plt.title(title)
     plt.show()
 
 
@@ -362,10 +399,12 @@ if __name__ == "__main__":
     dims = 8
 
     ray_o, ray_d = get_presp_rays(dims, dims, focal_length, torch.tensor(rot_mat))
-    plot_rays(ray_o, ray_d, 1.0)
+    ray_o, ray_d = ray_o.detach().cpu().numpy(), ray_d.detach().cpu().numpy()
+    plot_rays(ray_o, ray_d, 0.8, "Perspective Rays")
 
     ray_o, ray_d = get_ortho_rays(dims, dims, 1 / focal_length, torch.tensor(rot_mat))
-    plot_rays(ray_o, ray_d, 1.0)
+    ray_o, ray_d = ray_o.detach().cpu().numpy(), ray_d.detach().cpu().numpy()
+    plot_rays(ray_o, ray_d, 0.8, "Orthographic Rays")
 
 
 # %%
@@ -392,3 +431,34 @@ rot_theta = lambda th: torch.Tensor(
         [0, 0, 0, 1],
     ]
 ).float()
+
+
+# %% Plot angles round 2
+def spherical_to_cartesian(spherical_coords: np.ndarray) -> np.ndarray:
+    theta, phi = spherical_coords
+    x = np.sin(theta) * np.cos(phi)
+    y = np.sin(theta) * np.sin(phi)
+    z = np.cos(theta)
+    return np.array([x, y, z])
+
+
+def plot_angles(angles: np.ndarray, limited_indices: list[int] = None, title: str = ""):
+    cartesian_coords = np.array([spherical_to_cartesian(angle) for angle in angles])
+
+    colors = ["green" if i in limited_indices else "red" for i in range(len(angles))]
+
+    fig = plt.figure()
+    ax = fig.add_subplot(111, projection="3d")
+
+    ax.scatter(0, 0, 0, color="black", alpha=0.6, marker="x", s=75)
+    for coord, color in zip(cartesian_coords, colors):
+        ax.scatter(coord[0], coord[2], coord[1], color=color, alpha=0.6)
+
+    ax.set_xlabel("X")
+    ax.set_ylabel("Z")
+    ax.set_zlabel("Y")
+    ax.set_title(title)
+
+    ax.set_xlim([-1, 1])
+    ax.set_ylim([-1, 1])
+    ax.set_zlim([-1, 1])

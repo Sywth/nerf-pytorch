@@ -185,6 +185,35 @@ class NeRF(nn.Module):
         )
 
 
+class NerfMonoCt(nn.Module):
+    def __init__(self, D=8, W=256, input_ch=3, skips=[4]):
+        super(NerfMonoCt, self).__init__()
+        self.D = D
+        self.W = W
+        self.input_ch = input_ch
+        self.skips = skips
+
+        self.pts_linears = nn.ModuleList(
+            [nn.Linear(input_ch, W)]
+            + [
+                nn.Linear(W, W) if i not in self.skips else nn.Linear(W + input_ch, W)
+                for i in range(D - 1)
+            ]
+        )
+
+        self.output_linear = nn.Linear(W, 1)
+
+    def forward(self, x):
+        h = x
+        for i in range(self.D):
+            h = self.pts_linears[i](h)
+            h = F.relu(h)
+            if i in self.skips:
+                h = torch.cat([x, h], dim=-1)
+        outputs = self.output_linear(h)
+        return outputs
+
+
 # Ray helpers
 def get_rays(H, W, K, c2w):
     i, j = torch.meshgrid(
@@ -222,9 +251,7 @@ def get_rays_ortho(H, W, c2w, view_bounds=(-1, 1, -1, 1), scale=1.0):
     rays_o = torch.sum(rays_o[..., np.newaxis, :] * c2w[:3, :3], -1) + c2w[:3, -1]
 
     # All rays have the same direction: negative z-axis in camera space transformed to world space
-    rays_d = c2w[:3, :3] @ torch.tensor(
-        [0, 0, -1.0], dtype=c2w.dtype
-    )
+    rays_d = c2w[:3, :3] @ torch.tensor([0, 0, -1.0], dtype=c2w.dtype)
     rays_d = rays_d.expand(rays_o.shape)
 
     return rays_o, rays_d

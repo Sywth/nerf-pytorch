@@ -25,36 +25,41 @@ import ct_scan_debug
 tomo_root_path = os.path.dirname(tomophantom.__file__)
 tomo_path = os.path.join(tomo_root_path, "phantomlib", "Phantom3DLibrary.dat")
 
+
 # %% [markdown]
 # ### For Generating CT Data
 # %%
 class AstraScanVec3D:
-    def __init__(self, phantom_shape, angles, img_res = 64.0):
+    def __init__(self, phantom_shape, angles, img_res=64.0):
         self.phantom_shape = phantom_shape
-        self.angles = np.array(angles)  # shape: (num_projections, 2) where each is (theta, phi,)
+        self.angles = np.array(
+            angles
+        )  # shape: (num_projections, 2) where each is (theta, phi,)
         self.inv_res = phantom_shape[0] / img_res
-        
+
         # These will be created in re_init()
         self.vol_geom = None
         self.proj_geom = None
         self.detector_resolution = None
-        
+
         self.re_init()
-    
+
     def re_init(self):
         self.vol_geom = astra.create_vol_geom(*self.phantom_shape)
         # Detector resolution derived from the phantom shape (using first two dimensions)
-        self.detector_resolution = (np.array(self.phantom_shape[:2]) / self.inv_res).astype(int)
-        
+        self.detector_resolution = (
+            np.array(self.phantom_shape[:2]) / self.inv_res
+        ).astype(int)
+
         # Compute the 12-element projection vectors from angles.
         vectors = self._compute_projection_vectors()
         self.proj_geom = astra.create_proj_geom(
-            'parallel3d_vec',
+            "parallel3d_vec",
             self.detector_resolution[0],  # number of detector rows
             self.detector_resolution[1],  # number of detector columns
-            vectors
+            vectors,
         )
-    
+
     def get_ct_camera_poses(self, radius=2.0):
         poses = []
         for theta, phi in self.angles:
@@ -62,11 +67,10 @@ class AstraScanVec3D:
             c2w = pose_spherical_deg(np.rad2deg(theta), np.rad2deg(phi), radius)
             if isinstance(c2w, torch.Tensor):
                 c2w = c2w.detach().cpu().numpy()
-                
-            # Convert to a numpy array if necessary.
-            poses.append(c2w.numpy() if hasattr(c2w, 'numpy') else np.array(c2w))
-        return np.stack(poses)
 
+            # Convert to a numpy array if necessary.
+            poses.append(c2w.numpy() if hasattr(c2w, "numpy") else np.array(c2w))
+        return np.stack(poses)
 
     def _compute_projection_vectors(self):
         # Get the camera poses (each a 4x4 matrix).
@@ -78,7 +82,7 @@ class AstraScanVec3D:
         for i, pose in enumerate(poses):
             # Extract the rotation matrix and translation vector from the pose.
             R = pose[:3, :3]  # 3x3 rotation
-            t = pose[:3, 3]   # camera center in world coordinates
+            t = pose[:3, 3]  # camera center in world coordinates
 
             # Compute the ray: a unit vector pointing from the camera toward the origin.
             norm_t = np.linalg.norm(t)
@@ -88,7 +92,7 @@ class AstraScanVec3D:
 
             # Using the NeRF convention (columns: [right, up, -view_dir]), extract:
             right = R[:, 0]  # detector's horizontal direction (u)
-            up = R[:, 1]     # detector's vertical direction (v)
+            up = R[:, 1]  # detector's vertical direction (v)
 
             # Assemble the 12-element vector: [ray, d, u, v].
             # Here, we choose d (detector center) to be [0, 0, 0].
@@ -101,47 +105,55 @@ class AstraScanVec3D:
 
     def generate_ct_imgs(self, phantom):
         if self.proj_geom is None or self.vol_geom is None:
-            raise ValueError("Projection geometry and volume geometry must be initialized.")
-        
+            raise ValueError(
+                "Projection geometry and volume geometry must be initialized."
+            )
+
         volume_id = astra.data3d.create("-vol", self.vol_geom, phantom)
         proj_id = astra.create_projector("cuda3d", self.proj_geom, self.vol_geom)
-        sinogram_id, sinogram = astra.create_sino3d_gpu(volume_id, self.proj_geom, self.vol_geom, returnData=True)
-        
+        sinogram_id, sinogram = astra.create_sino3d_gpu(
+            volume_id, self.proj_geom, self.vol_geom, returnData=True
+        )
+
         # Free resources
         astra.data3d.delete(volume_id)
         astra.projector.delete(proj_id)
         astra.data3d.delete(sinogram_id)
-        
+
         # Rearranging axes if necessary (this step can be adjusted based on downstream use)
         return np.moveaxis(sinogram, 0, 1)
-    
+
     def reconstruct_3d_volume_sirt(self, ct_imgs, num_iterations=64):
         if self.proj_geom is None or self.vol_geom is None:
-            raise ValueError("Projection geometry and volume geometry must be initialized.")
-        
+            raise ValueError(
+                "Projection geometry and volume geometry must be initialized."
+            )
+
         sinogram = ct_imgs.swapaxes(0, 1)
         sinogram_id = astra.data3d.create("-proj3d", self.proj_geom, sinogram)
         reconstruction_id = astra.data3d.create("-vol", self.vol_geom)
-        
+
         # Configure the reconstruction algorithm (here SIRT3D_CUDA is used)
         alg_cfg = astra.astra_dict("SIRT3D_CUDA")
         alg_cfg["ProjectionDataId"] = sinogram_id
         alg_cfg["ReconstructionDataId"] = reconstruction_id
         algorithm_id = astra.algorithm.create(alg_cfg)
-        
+
         astra.algorithm.run(algorithm_id, num_iterations)
         reconstruction = astra.data3d.get(reconstruction_id)
-        
+
         # Clean up
         astra.algorithm.delete(algorithm_id)
         astra.data3d.delete(sinogram_id)
         astra.data3d.delete(reconstruction_id)
-        
+
         return reconstruction
-                
+
     def reconstruct_3d_volume_cgls(self, ct_imgs, num_iterations=64):
         if self.proj_geom is None or self.vol_geom is None:
-            raise ValueError("Projection geometry and volume geometry must be initialized.")
+            raise ValueError(
+                "Projection geometry and volume geometry must be initialized."
+            )
 
         sinogram = ct_imgs.swapaxes(0, 1)
 
@@ -167,6 +179,7 @@ class AstraScanVec3D:
         astra.data3d.delete(reconstruction_id)
 
         return reconstruction
+
 
 # %% [markdown]
 # ### For Generating Visual Data
@@ -199,7 +212,7 @@ def generate_visuale_scene(mesh_path, image_size, cam_pose, fov_deg, use_ortho=F
         color=np.array([0.08, 0.15, 0.90]),
         intensity=30.0,
     )
-    bg_color = np.array([1.0, 0.0, 1.0, 0.0]) # Transparent background
+    bg_color = np.array([1.0, 0.0, 1.0, 0.0])  # Transparent background
     scene = pyrender.Scene(bg_color=bg_color)
 
     for mesh in meshes:
@@ -212,7 +225,10 @@ def generate_visuale_scene(mesh_path, image_size, cam_pose, fov_deg, use_ortho=F
     renderer = pyrender.OffscreenRenderer(*image_size)
     return scene, camera_node, renderer
 
+
 DEBUG = False
+
+
 def generate_visual_projections(
     mesh_path,
     num_views=16,
@@ -233,7 +249,7 @@ def generate_visual_projections(
         ct_scan_debug.add_cardinal_axes(scene, axis_length=1.0)
 
     images = []
-    flags =pyrender.RenderFlags.RGBA | 0
+    flags = pyrender.RenderFlags.RGBA | 0
 
     camera_translate = np.array([0, 0.5, 0.0])
 
@@ -250,6 +266,8 @@ def generate_visual_projections(
     images = np.array(images) / 255.0
 
     return np.array(images), poses, angles
+
+
 # %% [markdown]
 # ### Auxillary Functions
 # %%
@@ -261,9 +279,9 @@ def load_phantom(phantom_idx=4, size=256):
     Big Cylinder                        : 2
     Verticle Cylinders                  : 3
     Cube Spheres                        : 4
-    Cross of cylinders and ellipsoids   : 5 
-    Light Splotch                       : 6 
-    Lots of dots                        : 7 
+    Cross of cylinders and ellipsoids   : 5
+    Light Splotch                       : 6
+    Lots of dots                        : 7
     Spheres in a disk                   : 8
     Spread out cube spheres             : 9
     SheppLogan                          : 13
@@ -272,6 +290,7 @@ def load_phantom(phantom_idx=4, size=256):
     """
     phantom = TomoP3D.Model(phantom_idx, size, tomo_path)
     return phantom
+
 
 def get_npz_dict(ct_imgs, ct_poses, angles, phantom, fov_deg):
     return {
@@ -282,7 +301,8 @@ def get_npz_dict(ct_imgs, ct_poses, angles, phantom, fov_deg):
         "camera_angle_x": np.deg2rad(fov_deg),
     }
 
-def rgb_to_rgba(imgs : np.ndarray) -> np.ndarray:
+
+def rgb_to_rgba(imgs: np.ndarray) -> np.ndarray:
     # (N, H, W, 3) -> (N, H, W, 4)
     assert imgs.ndim == 4, "Must be N-array of (H,W,3) images"
     assert imgs.shape[-1] == 3, "Must be rgb images"
@@ -291,9 +311,10 @@ def rgb_to_rgba(imgs : np.ndarray) -> np.ndarray:
     rgba_imgs = np.concatenate([imgs, alpha_channel], axis=-1)
     return rgba_imgs
 
+
 def remove_bg(imgs, white_threshold=0.0, black_threshold=0.05):
     # (N, H, W, 4) -> (N, H, W, 4)
-    # Remove if pixel is 
+    # Remove if pixel is
     assert imgs.ndim == 4, "Input must be 4D array"
     assert imgs.shape[-1] == 4, "Input must be RGBA images"
 
@@ -314,6 +335,7 @@ def remove_bg(imgs, white_threshold=0.0, black_threshold=0.05):
     imgs[..., 3:] = alpha
 
     return imgs
+
 
 def export_npz(npz, phantom_idx=None):
     # Define the export directory
@@ -380,6 +402,7 @@ def export_npz(npz, phantom_idx=None):
 
     return export_path
 
+
 # %%
 def lerp_ct_imgs(ct_imgs_even):
     """
@@ -389,28 +412,33 @@ def lerp_ct_imgs(ct_imgs_even):
     ct_imgs_lerp = np.zeros((n * 2, *ct_imgs_even.shape[1:]), dtype=ct_imgs_even.dtype)
     ct_imgs_lerp[::2] = ct_imgs_even
     ct_imgs_odd = (ct_imgs_even[:-1] + ct_imgs_even[1:]) / 2
-    ct_imgs_odd = np.concatenate([ct_imgs_odd, [((ct_imgs_even[-1] + ct_imgs_even[0]) / 2)]])
+    ct_imgs_odd = np.concatenate(
+        [ct_imgs_odd, [(ct_imgs_even[-1] + ct_imgs_even[0]) / 2]]
+    )
     ct_imgs_lerp[1::2] = ct_imgs_odd
     return ct_imgs_lerp
+
+
 # %%
+
 
 def lanczos_ct_imgs(ct_imgs_even):
     """
     Interpolate sinogram images using Lanczos interpolation along the projection axis.
-    
-    For each pixel location (i,j), the 1D array over the N views is resized 
+
+    For each pixel location (i,j), the 1D array over the N views is resized
     from length N to length 2N using cv2.resize with Lanczos interpolation.
     The function ensures that the original sinogram values appear at even indices.
-    
+
     Parameters:
         ct_imgs_even (np.ndarray): Input sinogram of shape (N, H, W)
-        
+
     Returns:
         np.ndarray: Interpolated sinogram of shape (2N, H, W)
     """
     N, H, W = ct_imgs_even.shape
     ct_imgs_interp = np.zeros((2 * N, H, W), dtype=ct_imgs_even.dtype)
-    
+
     # Loop over spatial dimensions to interpolate along the sinogram (angle) axis
     for i in range(H):
         for j in range(W):
@@ -420,48 +448,47 @@ def lanczos_ct_imgs(ct_imgs_even):
             # Resize from (N, 1) to (2N, 1) using Lanczos interpolation
             col_interp = cv2.resize(col, (1, 2 * N), interpolation=cv2.INTER_LANCZOS4)
             ct_imgs_interp[:, i, j] = col_interp[:, 0]
-    
+
     # Ensure that the original views remain exactly at even indices
     ct_imgs_interp[::2] = ct_imgs_even
     return ct_imgs_interp
+
+
 # %%
 from skimage.metrics import structural_similarity as ssim_metric
+
+
 def compute_ssim(gt_img: np.ndarray, pred_img: np.ndarray) -> float:
     ssim_value = ssim_metric(gt_img, pred_img, data_range=gt_img.max() - gt_img.min())
     return ssim_value
 
-# NOTE : TODO : DEBUG : fix SSIM computation
-def plot_reconstructions(scan, ct_imgs, phantom, ph_size, title="Reconstructions", num_dp = 4) -> tuple[np.ndarray, np.ndarray]:
+
+def plot_reconstructions(
+    scan, ct_imgs, phantom, ph_size, title="Reconstructions", num_dp=4
+) -> np.ndarray:
     print(f"\nReconstructing from {ct_imgs.shape[0]} views...")
 
-    recon_cgls = scan.reconstruct_3d_volume_cgls(ct_imgs)
     recon_sirt = scan.reconstruct_3d_volume_sirt(ct_imgs)
 
-    test_idx = (ph_size // 2) 
-    recon_cgls_slice = recon_cgls[test_idx]
+    test_idx = ph_size // 2
     recon_sirt_slice = recon_sirt[test_idx]
     phantom_slice = phantom[test_idx]
-    
-    psnr_cgls = utils.psnr(phantom, recon_cgls)
-    ssim_cgls = compute_ssim(phantom_slice, recon_cgls_slice)
+
     psnr_sirt = utils.psnr(phantom, recon_sirt)
     ssim_sirt = compute_ssim(phantom_slice, recon_sirt_slice)
 
-    psnr_cgls = round(psnr_cgls, num_dp)
-    ssim_cgls = round(ssim_cgls, num_dp)
     psnr_sirt = round(psnr_sirt, num_dp)
     ssim_sirt = round(ssim_sirt, num_dp)
 
-    fig, axs = plt.subplots(1, 3, figsize=(15, 5))
-    fig.suptitle(title) 
-    axs[0].imshow(recon_cgls_slice, cmap="gray")
-    axs[0].set_title(f"CGLS Recon. (PSNR: {psnr_cgls}) (SSIM: {ssim_cgls})", fontsize=8)
-    axs[1].imshow(recon_sirt_slice, cmap="gray")
-    axs[1].set_title(f"SIRT Recon. (PSNR: {psnr_sirt}) (SSIM: {ssim_sirt})", fontsize=8)
-    axs[2].imshow(phantom_slice, cmap="gray")
-    axs[2].set_title("Phantom GT")
+    fig, axs = plt.subplots(1, 2, figsize=(10, 5))
+    fig.suptitle(title)
+    axs[0].imshow(recon_sirt_slice, cmap="gray")
+    axs[0].set_title(f"SIRT Recon. (PSNR: {psnr_sirt}) (SSIM: {ssim_sirt})", fontsize=8)
+    axs[1].imshow(phantom_slice, cmap="gray")
+    axs[1].set_title("Phantom GT")
     plt.show()
-    return recon_cgls, recon_sirt
+    return recon_sirt
+
 
 # %% [markdown]
 # ### Main
@@ -473,16 +500,12 @@ if __name__ == "__main__":
     assert num_scans % 2 == 0, "Number of scans must be even"
 
     phantom = load_phantom(phantom_idx, ph_size)
-    spherical_angles = np.array([
-        [theta, 0.0] for theta in np.linspace(0, np.pi, num_scans, endpoint=False)
-    ])
+    spherical_angles = np.array(
+        [[theta, 0.0] for theta in np.linspace(0, np.pi, num_scans, endpoint=False)]
+    )
 
-    scan_2n = AstraScanVec3D(
-        phantom.shape, spherical_angles, img_res=256
-    )
-    scan_n = AstraScanVec3D(
-        phantom.shape, spherical_angles[::2], img_res=256
-    )
+    scan_2n = AstraScanVec3D(phantom.shape, spherical_angles, img_res=256)
+    scan_n = AstraScanVec3D(phantom.shape, spherical_angles[::2], img_res=256)
     ct_imgs = scan_2n.generate_ct_imgs(phantom)
 
     # Every 2nd image
@@ -491,17 +514,40 @@ if __name__ == "__main__":
     ct_imgs_lerp = lerp_ct_imgs(ct_imgs_even)
     # plot_reconstructions(ct_imgs_even, phantom, size, title=f"Reconstruction from {num_scans} views")
 
-    plot_reconstructions(scan_2n, ct_imgs, phantom, ph_size, title=f"[Full Orignial] Reconstruction from {num_scans} views")
-    plot_reconstructions(scan_n, ct_imgs_even, phantom, ph_size, title=f"[Half Orignial] Reconstruction from {num_scans // 2} views")
+    plot_reconstructions(
+        scan_2n,
+        ct_imgs,
+        phantom,
+        ph_size,
+        title=f"[Full Orignial] Reconstruction from {num_scans} views",
+    )
+    plot_reconstructions(
+        scan_n,
+        ct_imgs_even,
+        phantom,
+        ph_size,
+        title=f"[Half Orignial] Reconstruction from {num_scans // 2} views",
+    )
 
-    plot_reconstructions(scan_2n, ct_imgs_lerp, phantom, ph_size, title=f"[Half Orignial, Half Lerp] Reconstruction from {num_scans} views")
-    plot_reconstructions(scan_2n, ct_imgs_lanczos, phantom, ph_size, title=f"[Half Orignial, Half lanczos] Reconstruction from {num_scans} views")
+    plot_reconstructions(
+        scan_2n,
+        ct_imgs_lerp,
+        phantom,
+        ph_size,
+        title=f"[Half Orignial, Half Lerp] Reconstruction from {num_scans} views",
+    )
+    plot_reconstructions(
+        scan_2n,
+        ct_imgs_lanczos,
+        phantom,
+        ph_size,
+        title=f"[Half Orignial, Half lanczos] Reconstruction from {num_scans} views",
+    )
 
-
-    # Create GIFs of one interpolation method at a tiem 
+    # Create GIFs of one interpolation method at a tiem
     ct_imgs_interp = ct_imgs_lanczos
     method = "lanczos"
-    
+
     ct_bp_interp = scan_2n.reconstruct_3d_volume_cgls(ct_imgs_interp)
     ct_bp = scan_2n.reconstruct_3d_volume_cgls(ct_imgs)
 
@@ -509,7 +555,7 @@ if __name__ == "__main__":
     if render_gifs:
         print("Creating GIFs...")
         prefix = f"[{phantom_idx}_{ph_size}] "
-        
+
         # Scan-wise GIFs
         utils.create_gif(
             ct_imgs,
@@ -537,7 +583,10 @@ if __name__ == "__main__":
         )
         utils.create_gif(
             ct_bp_interp[::every_n],
-            [str(utils.psnr(ct_bp_interp[i], ct_bp[i])) for i in range(0, ct_bp.shape[0], every_n)],
+            [
+                str(utils.psnr(ct_bp_interp[i], ct_bp[i]))
+                for i in range(0, ct_bp.shape[0], every_n)
+            ],
             "Reconstruction PSNR {}",
             f"./figs/temp/{prefix}ct_bp_{method}.gif",
             fps=12,
