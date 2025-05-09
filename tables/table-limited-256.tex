@@ -1,0 +1,17 @@
+\begin{tabular}{|l|cc|cc|cc|cc|}
+\toprule
+Phantom Index & \multicolumn{2}{c|}{Phantom 13} & \multicolumn{2}{c|}{Phantom 16} & \multicolumn{2}{c|}{Phantom 4} & \multicolumn{2}{c|}{Mean} \\
+ & PSNR & SSIM & PSNR & SSIM & PSNR & SSIM & SSIM & PSNR \\
+Method &  &  &  &  &  &  &  &  \\
+\midrule
+SIRT Full Set & 70.590 & 0.282 & 70.003 & 0.680 & 74.344 & 0.291 & 0.418 & 71.645 \\
+SIRT Train Set & 58.230 & 0.187 & \cellcolor{ranksecond}59.988 & \cellcolor{rankthird}0.542 & \cellcolor{rankthird}58.205 & \cellcolor{rankthird}0.174 & 0.301 & \cellcolor{rankthird}58.808 \\
+LERP & 58.063 & 0.177 & \cellcolor{rankfirst}60.747 & \cellcolor{ranksecond}0.565 & \cellcolor{ranksecond}59.992 & 0.166 & \cellcolor{rankthird}0.303 & \cellcolor{ranksecond}59.600 \\
+NeRF & 57.214 & 0.186 & 58.409 & 0.521 & \cellcolor{rankworst}55.051 & 0.127 & 0.278 & 56.891 \\
+Biharmonic & \cellcolor{rankthird}58.917 & \cellcolor{rankthird}0.193 & 58.591 & \cellcolor{rankthird}0.542 & 57.944 & \cellcolor{ranksecond}0.175 & \cellcolor{ranksecond}0.304 & 58.484 \\
+Navier-Stokes & 56.565 & 0.171 & 55.924 & 0.510 & 55.631 & 0.157 & 0.279 & 56.040 \\
+Fast Marching Method & \cellcolor{ranksecond}58.976 & \cellcolor{rankthird}0.193 & 57.558 & 0.532 & 57.428 & 0.167 & 0.297 & 57.987 \\
+TVR & \cellcolor{rankworst}54.071 & \cellcolor{rankworst}0.145 & \cellcolor{rankworst}54.798 & \cellcolor{rankworst}0.403 & 56.312 & \cellcolor{rankworst}0.124 & \cellcolor{rankworst}0.224 & \cellcolor{rankworst}55.060 \\
+Gaussian Splatting & \cellcolor{rankfirst}70.144 & \cellcolor{rankfirst}0.953 & \cellcolor{rankthird}59.692 & \cellcolor{rankfirst}0.873 & \cellcolor{rankfirst}98.354 & \cellcolor{rankfirst}0.998 & \cellcolor{rankfirst}0.941 & \cellcolor{rankfirst}76.063 \\
+\bottomrule
+\end{tabular}

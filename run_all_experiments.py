@@ -2,16 +2,12 @@ import subprocess
 import itertools
 
 scan_types = ["limited", "sparse"]
-scan_nums = [256]
+scan_nums = [64, 256]
 
 args1 = [
     f".\\results\\{st}-{sn}\\" for st, sn in itertools.product(scan_types, scan_nums)
 ]
 args2 = [str(ph_idx) for ph_idx in [4, 13, 16]]
-
-# # Override
-# args1 = [f".\\results\\sparse-256\\"]
-# args2 = [16]
 
 all_args = list(itertools.product(args1, args2))
 for arg1, arg2 in all_args:

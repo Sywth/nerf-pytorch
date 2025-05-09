@@ -347,7 +347,9 @@ def load_npz(fp, nerf_dtype=torch.float32):
 # %% [markdown]
 # Plotting rays
 # %%
-def plot_rays(ray_o: torch.Tensor, ray_d: torch.Tensor, scan_lim: float = 1.0):
+def plot_rays(
+    ray_o: torch.Tensor, ray_d: torch.Tensor, scan_lim: float = 1.0, title=""
+):
     ax = plt.figure().add_subplot(projection="3d")
     ax.set_proj_type("ortho")
     ax.quiver(
@@ -365,7 +367,7 @@ def plot_rays(ray_o: torch.Tensor, ray_d: torch.Tensor, scan_lim: float = 1.0):
     ax.set_xlim(-scan_lim, scan_lim)
     ax.set_ylim(-scan_lim, scan_lim)
     ax.set_zlim(-scan_lim, scan_lim)
-
+    plt.title(title)
     plt.show()
 
 
@@ -397,10 +399,12 @@ if __name__ == "__main__":
     dims = 8
 
     ray_o, ray_d = get_presp_rays(dims, dims, focal_length, torch.tensor(rot_mat))
-    plot_rays(ray_o, ray_d, 1.0)
+    ray_o, ray_d = ray_o.detach().cpu().numpy(), ray_d.detach().cpu().numpy()
+    plot_rays(ray_o, ray_d, 0.8, "Perspective Rays")
 
     ray_o, ray_d = get_ortho_rays(dims, dims, 1 / focal_length, torch.tensor(rot_mat))
-    plot_rays(ray_o, ray_d, 1.0)
+    ray_o, ray_d = ray_o.detach().cpu().numpy(), ray_d.detach().cpu().numpy()
+    plot_rays(ray_o, ray_d, 0.8, "Orthographic Rays")
 
 
 # %%

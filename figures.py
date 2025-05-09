@@ -11,6 +11,63 @@ from mpl_toolkits.mplot3d import Axes3D
 from skimage.metrics import structural_similarity as ssim
 from PIL import Image
 from matplotlib import font_manager
+from scipy.stats import multivariate_normal
+
+import ct_scan
+
+# %%
+
+# 1. Define parameters
+mean = np.array([0, 0])
+covariance_1 = np.array([[1, 0.8], [0.8, 1]])
+
+# 2. Generate evaluation grid
+x = np.linspace(-3, 3, 40)
+y = np.linspace(-3, 3, 40)
+X, Y = np.meshgrid(x, y)
+pos = np.dstack((X, Y))
+
+# 3. Multivariate normal distribution
+rv_1 = multivariate_normal(mean, covariance_1)
+Z_1 = rv_1.pdf(pos)
+
+
+# 4. Create figure with two subplots
+fig = plt.figure(figsize=(14, 6))
+cmap_str = "viridis"
+# 4.1 3D surface plot
+ax1 = fig.add_subplot(1, 2, 1, projection="3d")
+ax1.plot_surface(X, Y, Z_1, cmap=cmap_str, edgecolor="black", alpha=1.0)
+ax1.set_xlabel("X-axis")
+ax1.set_ylabel("Y-axis")
+ax1.set_zlabel("Probability Density")
+ax1.set_title("2D Multivariate Gaussian")
+
+# 4.2 2D contour (bird's eye view) plot
+ax2 = fig.add_subplot(1, 2, 2)
+contour = ax2.contourf(X, Y, Z_1, levels=5, cmap=cmap_str)
+ax2.contour(X, Y, Z_1, levels=5, colors="black", linewidths=0.5)
+ax2.set_xlabel("X-axis")
+ax2.set_ylabel("Y-axis")
+ax2.set_title("Contour Map (Covariance Spread)")
+ax2.set_aspect("equal")
+ax2.grid(True, alpha=1.0, color="black")
+fig.colorbar(contour, ax=ax2)
+
+plt.tight_layout()
+plt.show()
+
+# %%
+ph = ct_scan.load_phantom(phantom_idx=4)
+n_slices = 8
+for i in np.arange(0, ph.shape[0], ph.shape[0] // n_slices):
+    ph_slice = ph[i]
+    ph_slice += np.random.normal(0, 0.1, ph_slice.shape)
+    plt.imshow(ph_slice, interpolation="nearest", cmap="gray")
+    plt.axis("off")
+    plt.clim(0, 1)
+    plt.savefig(f"data/slices-4/slice_{i}.png", bbox_inches="tight", pad_inches=0)
+    plt.close()
 
 
 # %% Show absolute deviaton

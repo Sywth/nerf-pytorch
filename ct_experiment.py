@@ -70,10 +70,8 @@ ExperimentDataKey = Literal[
 ]
 # %%
 # Parse CLI arguments
-USE_COLORBAR = False
-
-SHOW_PLOT = True
-CLI_MODE = False
+SHOW_PLOT = False
+CLI_MODE = True
 
 if CLI_MODE:
     if len(sys.argv) != 3:
@@ -83,8 +81,8 @@ if CLI_MODE:
     fp_base = Path(sys.argv[1])
     ph_idx = int(sys.argv[2])
 else:
-    fp_base = Path("results/sparse-256")
-    ph_idx = 16
+    fp_base = Path("results/limited-256")
+    ph_idx = 13
 
 # Load Gaussian Data
 nf_pkl_matches = list(fp_base.glob(f"*_ph-{ph_idx}_*.pkl"))
@@ -108,7 +106,9 @@ gt_phantom_gs = normalize_data(np.load(path_to_gs_folder / "vol_gt.npy")).transp
     2, 0, 1
 )
 ct_imgs_gs = normalize_data(np.load(path_to_gs_folder / "ct_imgs_pred.npy"))
-recon_gs = normalize_data(np.load(path_to_gs_folder / "recon_pred.npy"))
+recon_gs = normalize_data(np.load(path_to_gs_folder / "recon_pred.npy")).transpose(
+    2, 0, 1
+)
 
 # Load NeRF Data
 ct_imgs_full_nf = normalize_data(experiment_data["GT scan images"])
@@ -118,7 +118,7 @@ recon_nf = normalize_data(experiment_data["pred recon"])
 # fmt : on
 
 # Misc Data from NeRF
-phantom_idx = experiment_data["phantom index"]
+phantom_idx = gt_phantom_nf.shape[0] // 2
 img_res = ct_imgs_full_nf.shape[1]
 test_type = experiment_data["test type"]
 poses = torch.from_numpy(experiment_data["GT scan poses"]).to(device)
@@ -142,7 +142,7 @@ folder = f"./out/dump_[{experiment_data['test type']}][{experiment_data['phantom
 
 
 def plot_fig(title: str):
-    plt.savefig(f"{folder}/{title}.png", dpi=300)
+    plt.savefig(f"{folder}/{title}.png", dpi=300, bbox_inches="tight")
     if SHOW_PLOT:
         plt.show()
     plt.clf()
@@ -393,7 +393,9 @@ def inpaint_tv_pytorch(
     sino_tv, losses = inpaint_tv_pytorch_core(
         sinogram,
         mask,
+        tv_weight=0.1,
     )
+    sino_tv_original = sino_tv.copy()
 
     for i in range(sinogram.shape[0]):
         sino_tv[i][mask == 0] = sinogram[i][mask == 0]
@@ -406,14 +408,24 @@ def inpaint_tv_pytorch(
     plt.tight_layout()
     plot_fig("tv_loss")
 
-    return sino_tv
+    return sino_tv, sino_tv_original
 
 
-ct_imgs_tv_rolled = inpaint_tv_pytorch(
+sino_tv, sino_tv_original = inpaint_tv_pytorch(
     ct_imgs_train_set_rolled.swapaxes(0, 1),
     mask_rolled,
-).swapaxes(0, 1)
+)
+ct_imgs_tv_rolled = sino_tv.swapaxes(0, 1)
 ct_imgs_tv = roll_backward(ct_imgs_tv_rolled)
+
+plt.imshow(sino_tv_original[sino_idx])
+plt.show()
+plt.imshow(sino_tv[sino_idx])
+plt.show()
+plt.imshow(sino_tv.swapaxes(0, 1)[ph_idx])
+plt.show()
+plt.imshow(sino_tv_original.swapaxes(0, 1)[ph_idx])
+plt.show()
 
 
 # %% Lerp
@@ -495,7 +507,7 @@ all_ct_imgs = [
     ct_imgs_ns,
     ct_imgs_fmm,
     ct_imgs_tv,
-    ct_imgs_gs,
+    ct_imgs_gs,  # DO NOT USE THIS FOR RECON
 ]
 # %% Reoncstruction
 titles_phantom_plot = [
@@ -512,6 +524,7 @@ titles_phantom_plot = [
 ]
 all_reconstructions = [gt_phantom_nf]
 use_part_scanner_idx = 1
+gaussian_idx = len(all_ct_imgs) - 1
 for i, ct_imgs in enumerate(tqdm.tqdm(all_ct_imgs, desc="Reconstructing volumes")):
     if i == use_part_scanner_idx:
         ct_imgs = ct_imgs[limited_indices]
@@ -519,7 +532,11 @@ for i, ct_imgs in enumerate(tqdm.tqdm(all_ct_imgs, desc="Reconstructing volumes"
     else:
         scanner = full_scanner
 
-    recon = scanner.reconstruct_3d_volume_sirt(ct_imgs, num_iterations=256)
+    if i == gaussian_idx:
+        recon = recon_gs
+    else:
+        recon = scanner.reconstruct_3d_volume_sirt(ct_imgs, num_iterations=256)
+
     recon = normalize_data(recon)
     all_reconstructions.append(recon)
 
@@ -535,135 +552,163 @@ gt_sino_nf = ct_imgs_full_nf.swapaxes(0, 1)
 gt_sino_gs = ct_imgs_full_gs.swapaxes(0, 1)
 assert gt_sino_nf.shape == gt_sino_gs.shape, "GT sinograms should be the same shape"
 
-# %% [markdown]
-# ## Plotting
 
-# %%
-# Plot Phantoms
-fig, axes = plt.subplots(2, 5, figsize=(25, 10))
-axes = axes.flatten()
-phantom_idx = len(gt_phantom_nf) // 2
-for ax, title, phantom in zip(axes, titles_phantom_plot, all_reconstructions):
-    im = ax.imshow(
-        phantom[phantom_idx],
-        cmap="gray",
-        vmin=0,
-        vmax=1,
-        aspect="auto",
-    )
-    ax.set_title(title, fontsize=20)
-    ax.axis("off")
-
-# Add a colorbar
-if USE_COLORBAR:
-    cbar = fig.colorbar(im, ax=axes, orientation="vertical", fraction=0.046, pad=0.04)
-    cbar.set_label("Intensity (a.u.)", fontsize=16)
-    cbar.ax.tick_params(labelsize=12)
-else:
-    plt.tight_layout()
-plot_fig("phantom")
-
-# %%
-# Plot Sinograms
-fig, axes = plt.subplots(2, 5, figsize=(25, 10))
-axes = axes.flatten()
-for ax, title, ct_imgs in zip(axes[1:], titles_sino_plot, all_ct_imgs):
-    pred_img = ct_imgs.swapaxes(0, 1)[sino_idx]
-    im = ax.imshow(
-        pred_img,
-        cmap="gray",
-        vmin=0,
-        vmax=1,
-        aspect="auto",
-    )
-    ax.set_title(title, fontsize=20)
-    ax.axis("off")
-
-for ax in axes:
-    ax.axis("off")
-
-# Add a colorbar
-if USE_COLORBAR:
-    cbar = fig.colorbar(im, ax=axes, orientation="vertical", fraction=0.046, pad=0.04)
-    cbar.set_label("Intensity (a.u.)", fontsize=16)
-    cbar.ax.tick_params(labelsize=12)
-else:
-    plt.tight_layout()
-plot_fig("sinogram")
-
-# %% Plot Sinogram Abs Diffs
-fig, axes = plt.subplots(2, 5, figsize=(25, 10))
-axes = axes.flatten()
-for i, (ax, title, ct_imgs) in enumerate(
-    zip(axes[2:], titles_sino_plot[1:], all_ct_imgs[1:])
+def plot_images(
+    data_list,
+    titles,
+    save_path,
+    cmap="gray",
+    fig_title="",
+    colorbar_label="Intensity (a.u.)",
+    vmin=0,
+    vmax=1,
 ):
-    pred_img = ct_imgs.swapaxes(0, 1)[sino_idx]
-    gt_img = gt_sino_nf[sino_idx]
-    sino_diff = np.abs(pred_img - gt_img)
-    im = ax.imshow(
-        sino_diff,
-        vmin=0,
-        vmax=1,
-        aspect="auto",
-        cmap="magma",
+    fig, axes = plt.subplots(2, 5, figsize=(25, 10), constrained_layout=True)
+    fig.suptitle(fig_title, fontsize=26, y=1.05)
+    axes = axes.flatten()
+
+    data_plot_diff = len(axes) - len(data_list)
+
+    for ax, title, img in zip(axes[data_plot_diff:], titles, data_list):
+        im = ax.imshow(img, cmap=cmap, vmin=vmin, vmax=vmax, aspect="auto")
+        ax.set_title(title, fontsize=20)
+
+    for ax in axes:
+        ax.axis("off")
+
+    cbar = fig.colorbar(
+        im, ax=axes, orientation="vertical", fraction=0.025, pad=0.02, aspect=30
     )
-    ax.set_title(title, fontsize=20)
-
-for ax in axes:
-    ax.axis("off")
-
-# Add a colorbar
-if USE_COLORBAR:
-    cbar = fig.colorbar(im, ax=axes, orientation="vertical", fraction=0.046, pad=0.04)
-    cbar.set_label("Absolute Deviation (a.u.)", fontsize=16)
+    cbar.set_label(colorbar_label, fontsize=16)
     cbar.ax.tick_params(labelsize=12)
-else:
-    plt.tight_layout()
-plot_fig("sinogram_abs_diff")
 
-# %%
-# %% Plot Sinogram SSIM Gradients
-fig, axes = plt.subplots(2, 5, figsize=(25, 10))
-axes = axes.flatten()
+    plot_fig(save_path)
 
-ssim_gradient_imgs = np.array(
+
+# Example usage:
+# Plot Phantoms
+plot_images(
+    data_list=[recon[phantom_idx] for recon in all_reconstructions],
+    titles=titles_phantom_plot,
+    cmap="gray",
+    colorbar_label="Intensity (a.u.)",
+    save_path="phantom",
+    fig_title="Reconstructed Phantoms Sliced",
+)
+
+# Plot Sinograms
+plot_images(
+    data_list=[img.swapaxes(0, 1)[sino_idx] for img in all_ct_imgs],
+    titles=titles_sino_plot,
+    cmap="gray",
+    colorbar_label="Intensity (a.u.)",
+    save_path="sinogram",
+    fig_title="Sinograms Sliced",
+)
+
+# Pot Phantom AD
+plot_images(
+    data_list=[
+        np.abs(recon[phantom_idx] - gt_phantom_nf[phantom_idx])
+        for recon in all_reconstructions[1:]
+    ],
+    titles=titles_phantom_plot[1:],
+    cmap="magma",
+    colorbar_label="Absolute Deviation (a.u.)",
+    save_path="phantom_abs_diff",
+    fig_title="Phantom Absolute Differences",
+)
+
+# Plot Sinogram AD
+plot_images(
+    data_list=[
+        np.abs(img.swapaxes(0, 1)[sino_idx] - gt_sino_nf[sino_idx])
+        for img in all_ct_imgs[1:]
+    ],
+    titles=titles_sino_plot[1:],
+    cmap="magma",
+    colorbar_label="Absolute Deviation (a.u.)",
+    save_path="sinogram_abs_diff",
+    fig_title="Sinogram Absolute Differences",
+)
+
+# Plot Phantom SSIM Gradients
+ssim_phantoms = np.array(
+    [
+        ssim(
+            gt_phantom_nf[phantom_idx],
+            recon[phantom_idx],
+            gradient=True,
+            full=True,
+            data_range=1.0,
+        )[1:3]
+        for recon in all_reconstructions[1:]
+    ]
+)
+ssim_ph_gradient_imgs = ssim_phantoms[:, 0, :, :]
+ssim_ph_conv_imgs = ssim_phantoms[:, 1, :, :]
+
+plot_images(
+    data_list=ssim_ph_gradient_imgs,
+    titles=titles_phantom_plot[1:],
+    cmap="magma",
+    vmin=np.min(ssim_ph_gradient_imgs),
+    vmax=np.max(ssim_ph_gradient_imgs),
+    colorbar_label="Pointwise SSIM Gradient (a.u.)",
+    save_path="phantom_ssim_grad",
+    fig_title="Phantom SSIM Gradients",
+)
+
+# Plot Sinogram SSIM Gradients
+ssim_sinos = np.array(
     [
         ssim(
             gt_sino_nf[sino_idx],
-            ct_imgs.swapaxes(0, 1)[sino_idx],
+            img.swapaxes(0, 1)[sino_idx],
             gradient=True,
+            full=True,
             data_range=1.0,
-        )[1]
-        for ct_imgs in all_ct_imgs[1:]
+        )[1:3]
+        for img in all_ct_imgs[1:]
     ]
 )
+ssim_si_gradient_imgs = ssim_sinos[:, 0, :, :]
+ssim_si_conv_imgs = ssim_sinos[:, 1, :, :]
 
-min_ssim = np.min(ssim_gradient_imgs)
-max_ssim = np.max(ssim_gradient_imgs)
+plot_images(
+    data_list=ssim_si_gradient_imgs,
+    titles=titles_sino_plot[1:],
+    cmap="magma",
+    vmin=np.min(ssim_si_gradient_imgs),
+    vmax=np.max(ssim_si_gradient_imgs),
+    colorbar_label="Pointwise SSIM Gradient (a.u.)",
+    save_path="sinogram_ssim_grad",
+    fig_title="Sinogram SSIM Gradients",
+)
 
-for i, (ax, title, img) in enumerate(
-    zip(axes[2:], titles_sino_plot[1:], ssim_gradient_imgs)
-):
-    im = ax.imshow(
-        img,
-        aspect="auto",
-        cmap="magma",
-        vmin=min_ssim,
-        vmax=max_ssim,
-    )
-    ax.set_title(title, fontsize=20)
+# Plot Phantom SSIM Convolutions
+plot_images(
+    data_list=ssim_ph_conv_imgs,
+    titles=titles_phantom_plot[1:],
+    cmap="magma",
+    vmin=np.min(ssim_ph_conv_imgs),
+    vmax=np.max(ssim_ph_conv_imgs),
+    colorbar_label="Pointwise SSIM Convolution (a.u.)",
+    save_path="phantom_ssim_conv",
+    fig_title="Phantom SSIM Convolutions",
+)
 
-for ax in axes:
-    ax.axis("off")
-
-# Add a colorbar
-if USE_COLORBAR:
-    cbar = fig.colorbar(im, ax=axes, orientation="vertical", fraction=0.046, pad=0.04)
-    cbar.set_label("Pointwise SSIM Gradient (a.u.)", fontsize=16, labelpad=22)
-    cbar.ax.tick_params(labelsize=12)
-else:
-    plt.tight_layout()
-plot_fig("sinogram_ssim_grad")
+# Plot Sinogram SSIM Convolutions
+plot_images(
+    data_list=ssim_si_conv_imgs,
+    titles=titles_sino_plot[1:],
+    cmap="magma",
+    vmin=np.min(ssim_si_conv_imgs),
+    vmax=np.max(ssim_si_conv_imgs),
+    colorbar_label="Pointwise SSIM Convolution (a.u.)",
+    save_path="sinogram_ssim_conv",
+    fig_title="Sinogram SSIM Convolutions",
+)
 
 
 # %%
@@ -697,3 +742,74 @@ title_df = f"metrics-{'limited' if test_type == 'limited scan' else 'sparse'}-{e
 path_df = Path(folder) / Path(f"{title_df}.csv")
 df_metrics.to_csv(path_df, index=False)
 df_metrics
+
+# %% DEBUG IGNORE
+if __name__ == "__main__" and False:
+    fig, ax = plt.subplots(figsize=(4, 5))  # Height = 2 × Width
+    ax.set_title("Initial Sinogram")
+    img = ct_imgs_train_set[limited_indices].swapaxes(0, 1)[sino_idx]
+
+    im = ax.imshow(
+        img, cmap="gray", aspect="auto"
+    )  # Let the figure size dictate the aspect
+    ax.set_xlabel("Width ($W$)")
+    ax.set_ylabel(r"Projection Index ($N$)")
+
+    limited_indices = np.array(limited_indices)
+    tick_step = 10
+    tick_positions = np.arange(0, len(limited_indices), tick_step)
+    tick_labels = limited_indices[tick_positions]
+    ax.set_yticks(tick_positions)
+    ax.set_yticklabels(tick_labels)
+
+    plt.tight_layout()
+    plt.show()
+
+    # %%
+
+    fig, ax = plt.subplots(figsize=(4, 5))  # Height = 2 × Width
+    ax.set_title("Re-stitched Sinogram")
+
+    img = ct_imgs_train_set.swapaxes(0, 1)[sino_idx]
+
+    ax.imshow(img, cmap="gray", aspect="auto")  # Let figure size control appearance
+    ax.set_xlabel("Width ($W$)")
+    ax.set_ylabel(r"Projection Index ($N$)")
+
+    plt.tight_layout()
+    plt.show()
+
+    # %%
+    # Mask
+    fig, ax = plt.subplots(figsize=(4, 5))  # Height = 2 × Width
+    ax.set_title("Mask")
+    img = mask
+    ax.imshow(img, cmap="gray", aspect="auto")  # Let figure size control appearance
+    ax.set_xlabel("Width ($W$)")
+    ax.set_ylabel(r"Projection Index ($N$)")
+    plt.tight_layout()
+    plt.show()
+
+    # %%
+    num_slices = 10
+    phantom_indices = [4, 13, 16]
+    ph_size = 128
+    slice_indices = np.linspace(0, ph_size - 1, num_slices).astype(np.int32)
+
+    fig, axes = plt.subplots(
+        len(phantom_indices),
+        num_slices,
+        figsize=(num_slices * 2, len(phantom_indices) * 2),
+    )
+
+    for row_idx, ph_idx in enumerate(phantom_indices):
+        tomo_ph = ct_scan.load_phantom(ph_idx, ph_size)
+        for col_idx, slice_idx in enumerate(slice_indices):
+            ax = axes[row_idx, col_idx]
+            ax.imshow(tomo_ph[slice_idx], cmap="gray")
+            ax.axis("off")
+
+    plt.subplots_adjust(wspace=0.1, hspace=0.1)
+    plt.suptitle("Phantom Slices", fontsize=16)
+    plt.tight_layout(rect=[0, 0, 1, 0.95])
+    plt.show()
